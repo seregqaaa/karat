@@ -245,6 +245,10 @@ if (typeof XLSX === "undefined")
       <div class="field"><label for="dFrom">С</label><input type="date" id="dFrom"></div>
       <div class="field"><label for="dTo">По</label><input type="date" id="dTo"></div>
       <span class="spacer"></span>
+      <button class="btn" id="btnSend" type="button" hidden>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 3L10 14"/><path d="M21 3l-7 18-4-7-7-4 18-7Z"/></svg>
+        Отправить
+      </button>
       <button class="btn" id="btnSave" type="button">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v10m0 0l-4-4m4 4l4-4"/><path d="M4 17v2a1.5 1.5 0 0 0 1.5 1.5h13A1.5 1.5 0 0 0 20 19v-2"/></svg>
         Сохранить в Excel
@@ -552,6 +556,37 @@ document.getElementById("btnSave").onclick = () => {
 };
 document.getElementById("btnOther").onclick = () => fi.click();
 
+// «Отправить» — только в APK: адрес берётся из config.js, который кладётся
+// в assets при сборке приложения и на сайте отсутствует
+document.getElementById("btnSend").onclick = async () => {
+  if (!ARC || !window.SEND_URL) return;
+  if (typeof XLSX === "undefined"){
+    alert("Библиотека Excel не загрузилась — проверьте соединение");
+    return;
+  }
+  const btn = document.getElementById("btnSend");
+  btn.disabled = true;
+  try {
+    const {wb, fname} = buildReport();
+    const resp = await fetch(window.SEND_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "X-Filename": encodeURIComponent(fname),
+      },
+      body: XLSX.write(wb, {bookType:"xlsx", type:"array"}),
+    });
+    const ans = await resp.json().catch(() => ({}));
+    if (!resp.ok || !ans.ok) throw new Error(ans.error || "HTTP " + resp.status);
+    rememberExport();
+    alert("Письмо отправлено:\n" + fname);
+  } catch (e) {
+    alert("Не удалось отправить: " + e.message);
+  } finally {
+    btn.disabled = false;
+  }
+};
+
 // ===== Авто-режим в приложении (Android) =====
 const dropTitle = document.getElementById("dropTitle");
 const scanStatus = document.getElementById("scanStatus");
@@ -652,6 +687,12 @@ if (BRIDGE){
     ev.stopPropagation();
     fi.click();
   };
+  // конфиг с адресом отправки подгружается только в APK (config.js в assets);
+  // кнопка «Отправить» появляется, лишь если конфиг есть и задан SEND_URL
+  const cfg = document.createElement("script");
+  cfg.src = "config.js";
+  cfg.onload = () => { if (window.SEND_URL) document.getElementById("btnSend").hidden = false; };
+  document.head.appendChild(cfg);
   autoScan();
 }
 
