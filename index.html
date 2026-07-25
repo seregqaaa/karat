@@ -416,7 +416,8 @@ function toggleSort(key){
   render();
 }
 function render(){
-  const rows = sorted(filtered()), names = ARC.names.slice(1);
+  // Er0 показываем только в отчёте («Причина ненаработки»), в таблице скрыт
+  const rows = sorted(filtered()), names = ARC.names.slice(1).filter(n => n !== "Er0");
   const ind = k => SORT.key === k ? `<span class="ind">${SORT.dir>0?" ↑":" ↓"}</span>` : "";
   let html = `<thead><tr><th data-sort="date" title="Сортировать">Дата${ind("date")}</th>` +
     names.map(n=>`<th data-sort="${n}" title="Сортировать">${n}${ind(n)}</th>`).join("") + "</tr></thead><tbody>";
