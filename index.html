@@ -543,10 +543,10 @@ document.getElementById("btnSave").onclick = () => {
   const {wb, fname} = buildReport();
   if (BRIDGE){
     let path = "";
-    try { path = BRIDGE.saveFile(fname, XLSX.write(wb, {bookType:"xlsx", type:"base64"})); } catch(e){}
+    try { path = BRIDGE.saveFile(fname, XLSX.write(wb, {bookType:"xlsx", type:"base64", compression:true})); } catch(e){}
     alert(path ? "Отчёт сохранён в Загрузки:\n" + fname : "Не удалось сохранить отчёт");
   } else {
-    XLSX.writeFile(wb, fname);
+    XLSX.writeFile(wb, fname, {compression:true});
   }
   rememberExport();
 };
@@ -572,7 +572,7 @@ async function sendReport(btn){
     const resp = await fetch(window.SEND_URL, {
       method: "POST",
       headers,
-      body: XLSX.write(wb, {bookType:"xlsx", type:"array"}),
+      body: XLSX.write(wb, {bookType:"xlsx", type:"array", compression:true}),
     });
     const ans = await resp.json().catch(() => ({}));
     if (!resp.ok || !ans.ok) throw new Error(ans.error || "HTTP " + resp.status);
