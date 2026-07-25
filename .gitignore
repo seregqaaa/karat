@@ -9,3 +9,6 @@ test-mail.mjs
 package.json
 package-lock.json
 keys/
+
+# APK: внутри лежит config.js с адресом облачной функции
+*.apk
