@@ -1,2 +1,9 @@
 .env
 node_modules/
+
+# серверная часть — пока не публикуется
+mail-server.mjs
+yc-function.mjs
+test-mail.mjs
+package.json
+package-lock.json
