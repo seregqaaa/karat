@@ -568,12 +568,14 @@ document.getElementById("btnSend").onclick = async () => {
   btn.disabled = true;
   try {
     const {wb, fname} = buildReport();
+    const headers = {
+      "Content-Type": "application/octet-stream",
+      "X-Filename": encodeURIComponent(fname),
+    };
+    if (window.SEND_ADDRESS) headers["X-Address"] = encodeURIComponent(window.SEND_ADDRESS);
     const resp = await fetch(window.SEND_URL, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/octet-stream",
-        "X-Filename": encodeURIComponent(fname),
-      },
+      headers,
       body: XLSX.write(wb, {bookType:"xlsx", type:"array"}),
     });
     const ans = await resp.json().catch(() => ({}));

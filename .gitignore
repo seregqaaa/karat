@@ -8,3 +8,4 @@ yc-function.*
 test-mail.mjs
 package.json
 package-lock.json
+keys/
