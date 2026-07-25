@@ -1,0 +1,16 @@
+{
+  "name": "ЛУЧ-МК: показания в 1 клик",
+  "short_name": "ЛУЧ-МК",
+  "description": "Просмотр посуточных архивов .K20 теплосчётчиков КАРАТ и выгрузка отчёта в Excel — работает офлайн, данные не покидают устройство.",
+  "lang": "ru",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#161826",
+  "theme_color": "#161826",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

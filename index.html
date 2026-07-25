@@ -3,101 +3,243 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>K20 Viewer — посуточные архивы КАРАТ</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<title>ЛУЧ-МК: показания в 1 клик — просмотр файлов .K20 онлайн</title>
+<meta name="description" content="ЛУЧ-МК: показания в 1 клик — бесплатный онлайн-просмотр файлов .K20 с пульта ЛУЧ-МК. Таблица показаний теплосчётчиков КАРАТ по дням, выбор периода, отчёт в Excel одним кликом. Без КАРАТ-Экспресс и установки — данные остаются на вашем устройстве.">
+<meta name="theme-color" content="#161826">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<script src="xlsx.full.min.js"></script>
 <script>
-// оффлайн-запас для APK: если CDN недоступен, взять локальную копию из assets
+// локальная копия — основной путь (сайт, APK, офлайн); CDN — запас,
+// если index.html открыт отдельным файлом без xlsx.full.min.js рядом
 if (typeof XLSX === "undefined")
-  document.write('<script src="xlsx.full.min.js"><\/script>');
+  document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"><\/script>');
 </script>
 <style>
   :root{
-    --bg:#101418; --panel:#1a2027; --panel2:#212934; --border:#2e3a47;
-    --text:#e8edf2; --muted:#8b98a5; --accent:#4da3ff; --accent2:#79c0ff;
-    --ok:#57c87b; --warn:#e8b44a;
+    --bg:#161826; --text:#e9e9ed; --muted:#8f94a8; --muted2:#b9bdcc;
+    --accent:#9184d9; --accent-300:#c7bff0; --head:#232637; --head-text:#d3d6e0;
+    --border:rgba(233,233,237,.1); --border2:rgba(233,233,237,.14); --warn:#e8b44a;
+    --zebra:rgba(233,233,237,.035); --zebra-solid:color-mix(in srgb,var(--bg) 96.5%,#e9e9ed);
+    --hover:rgba(145,132,217,.08); --hover-solid:color-mix(in srgb,var(--bg) 92%,var(--accent));
+    --radius:8px;
   }
   *{box-sizing:border-box; margin:0; padding:0}
-  body{background:var(--bg); color:var(--text); font:14px/1.5 "Segoe UI",system-ui,sans-serif; padding:24px}
-  h1{font-size:20px; font-weight:600; margin-bottom:4px}
-  .sub{color:var(--muted); margin-bottom:20px; font-size:13px}
-  #drop{border:2px dashed var(--border); border-radius:12px; padding:40px; text-align:center;
-        color:var(--muted); cursor:pointer; transition:.15s; background:var(--panel)}
-  #drop.over,#drop:hover{border-color:var(--accent); color:var(--accent2)}
-  #drop b{color:var(--text)}
+  body{background:var(--bg); color:var(--text); color-scheme:dark;
+       font:14px/1.5 Inter,"Segoe UI",system-ui,sans-serif;
+       min-height:100vh; display:flex; flex-direction:column}
+  a{color:var(--accent-300)} a:hover{color:var(--accent)}
+  :focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+  ::selection{background:rgba(145,132,217,.35)}
+  button{font:inherit; cursor:pointer}
   .hidden{display:none!important}
-  .meta{display:flex; gap:24px; flex-wrap:wrap; background:var(--panel); border:1px solid var(--border);
-        border-radius:10px; padding:14px 18px; margin:18px 0}
-  .meta div span{display:block; color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.05em}
-  .meta div b{font-size:15px; font-weight:600}
-  .controls{display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap; margin-bottom:16px}
+
+  header{display:flex; align-items:center; gap:12px; padding:13px clamp(16px,4vw,28px);
+         border-bottom:1px solid rgba(233,233,237,.09)}
+  .brand{font-size:14.5px; font-weight:600; white-space:nowrap}
+  header nav{margin-left:auto; display:flex; align-items:center}
+  header nav a{color:var(--muted2); display:flex; align-items:center}
+  header nav a:hover{color:var(--accent)}
+
+  .btn{display:inline-flex; align-items:center; justify-content:center; gap:8px;
+       min-height:36px; padding:6px 16px; font-size:13.5px; font-weight:600;
+       border-radius:var(--radius); border:1px solid var(--accent);
+       background:transparent; color:var(--accent); text-decoration:none}
+  .btn:hover{background:rgba(145,132,217,.12)}
+  .btn:active{color:var(--accent-300); border-color:var(--accent-300)}
+  .btn.ghost{border-color:rgba(233,233,237,.18); color:var(--muted2); font-weight:500}
+  .btn.ghost:hover{border-color:var(--accent); color:var(--accent-300); background:transparent}
+
+  .hero{padding:clamp(24px,5vw,38px) clamp(16px,4vw,24px) 26px; max-width:720px;
+        margin:0 auto; text-align:center}
+  .kicker{display:inline-block; font-size:11px; font-weight:600; letter-spacing:.08em;
+          text-transform:uppercase; color:var(--accent); border:1px solid rgba(145,132,217,.4);
+          border-radius:99px; padding:4px 12px; margin-bottom:14px}
+  h1{font-size:clamp(19px,3.4vw,24px); font-weight:500; line-height:1.25;
+     text-wrap:pretty; margin-bottom:8px}
+  .sub{color:var(--muted); font-size:13.5px; text-wrap:pretty; margin-bottom:22px}
+  .steps{display:flex; flex-wrap:wrap; gap:10px; justify-content:center; margin-bottom:22px}
+  .step{flex:1 1 170px; max-width:220px; border:1px solid var(--border);
+        border-radius:var(--radius); padding:12px 14px; text-align:left}
+  .step b{display:block; font-size:11px; color:var(--accent); font-weight:600; margin-bottom:3px}
+  .step span{font-size:12.5px; color:var(--muted2)}
+
+  #drop{border:1.5px dashed rgba(233,233,237,.22); border-radius:var(--radius);
+        padding:clamp(22px,4vw,30px) 16px; color:var(--muted); cursor:pointer;
+        background:rgba(233,233,237,.02); transition:border-color .15s}
+  #drop.over,#drop:hover{border-color:var(--accent)}
+  #drop b{color:var(--text)}
+  #dropTitle{margin-bottom:12px}
+  .status{margin-top:14px; font-size:13px; color:var(--accent-300)}
+  .filelist{margin-top:14px; display:flex; flex-direction:column; gap:8px; align-items:center}
+  .filelist button{background:transparent; color:var(--text); border:1px solid var(--border2);
+    border-radius:var(--radius); padding:9px 14px; font-weight:400; width:100%;
+    max-width:420px; text-align:left}
+  .filelist button:hover{border-color:var(--accent)}
+  .filelist button b{color:var(--accent-300)}
+  #permBox{margin-top:16px}
+  .sample{margin-top:12px}
+  .sample .btn{font-size:12.5px}
+
+  .cards{display:flex; flex-wrap:wrap; gap:12px; padding:0 clamp(16px,4vw,24px) 28px;
+         max-width:768px; margin:0 auto}
+  .cards a{flex:1 1 200px; border:1px solid var(--border); border-radius:var(--radius);
+           padding:12px 14px; text-decoration:none; color:inherit; display:block}
+  .cards a:hover{border-color:var(--accent)}
+  .cards b{font-size:12.5px; font-weight:600; display:block; margin-bottom:2px}
+  .cards span{font-size:11.5px; color:var(--muted)}
+
+  #app{flex:1; padding:20px clamp(12px,3vw,24px) 24px; max-width:1100px; margin:0 auto; width:100%}
+  .meta{display:flex; gap:16px 24px; flex-wrap:wrap; border:1px solid var(--border);
+        border-radius:var(--radius); padding:12px 16px; margin-bottom:12px;
+        background:rgba(233,233,237,.02)}
+  .meta div span{display:block; color:var(--muted); font-size:10.5px;
+        text-transform:uppercase; letter-spacing:.06em}
+  .meta div b{font-size:13.5px; font-weight:600}
+  .meta div b.file{display:block; max-width:220px; overflow:hidden;
+        text-overflow:ellipsis; white-space:nowrap}
+  .controls{display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap; margin-bottom:14px}
   .controls label{display:block; color:var(--muted); font-size:11px; text-transform:uppercase;
                   letter-spacing:.05em; margin-bottom:4px}
-  select,input[type=date]{background:var(--panel2); color:var(--text); border:1px solid var(--border);
-        border-radius:8px; padding:8px 10px; font-size:14px; color-scheme:dark}
-  button{background:var(--accent); color:#0b1420; border:none; border-radius:8px; padding:9px 16px;
-         font-size:14px; font-weight:600; cursor:pointer}
-  button:hover{background:var(--accent2)}
-  button.ghost{background:var(--panel2); color:var(--text); border:1px solid var(--border)}
-  button.ghost:hover{border-color:var(--accent)}
-  .tablewrap{overflow:auto; border:1px solid var(--border); border-radius:10px; max-height:70vh}
-  table{border-collapse:collapse; width:100%; font-variant-numeric:tabular-nums}
-  th,td{padding:7px 12px; text-align:right; white-space:nowrap; border-bottom:1px solid var(--border)}
-  th{position:sticky; top:0; background:var(--panel2); font-weight:600; font-size:12.5px; z-index:1}
-  td:first-child,th:first-child{text-align:left; position:sticky; left:0; background:var(--panel)}
-  th:first-child{background:var(--panel2); z-index:2}
-  tbody tr:hover td{background:#232d39}
-  tbody tr:hover td:first-child{background:#232d39}
-  td.flag{color:var(--warn); text-align:center}
-  tfoot td{background:var(--panel2); font-weight:600; border-top:2px solid var(--border);
-           position:sticky; bottom:0}
-  tfoot td:first-child{background:var(--panel2); z-index:2}
-  .count{color:var(--muted); font-size:13px; margin:10px 2px}
-  .note{color:var(--muted); font-size:12px; margin-top:12px}
-  .status{margin-top:14px; font-size:13px; color:var(--accent2)}
-  .filelist{margin-top:14px; display:flex; flex-direction:column; gap:8px; align-items:center}
-  .filelist button{background:var(--panel2); color:var(--text); border:1px solid var(--border);
-    font-weight:400; width:100%; max-width:420px; text-align:left}
-  .filelist button b{color:var(--accent2)}
-  #permBox{margin-top:16px}
+  .field{flex:1 1 130px; max-width:180px}
+  input[type=date]{width:100%; min-height:36px; background:rgba(233,233,237,.05);
+        color:var(--text); border:1px solid var(--border2); border-radius:var(--radius);
+        padding:6px 10px; font:inherit; font-size:13.5px; color-scheme:dark}
+  input[type=date]:hover{border-color:rgba(233,233,237,.3)}
+  input[type=date]:focus-visible{border-color:var(--accent); outline-offset:0}
+  .spacer{flex:2}
+
+  .tablewrap{overflow:auto; max-height:70vh; border:1px solid var(--border); border-radius:var(--radius)}
+  table{border-collapse:collapse; width:100%; font-variant-numeric:tabular-nums; font-size:13.5px}
+  th,td{padding:7px 12px; text-align:right; white-space:nowrap}
+  th{position:sticky; top:0; z-index:2; background:var(--head); color:var(--head-text);
+     padding:8px 12px; font-weight:600; font-size:12px; cursor:pointer; user-select:none}
+  th:hover{color:var(--accent-300)}
+  th .ind{color:var(--accent)}
+  th:first-child{text-align:left; left:0; z-index:3}
+  td{border-top:1px solid rgba(233,233,237,.06)}
+  td:first-child{text-align:left; position:sticky; left:0; background:var(--bg);
+     color:var(--muted2)}
+  tbody tr:nth-child(even) td{background:var(--zebra)}
+  tbody tr:nth-child(even) td:first-child{background:var(--zebra-solid)}
+  tbody tr:hover td{background:var(--hover)}
+  tbody tr:hover td:first-child{background:var(--hover-solid)}
+  td.flag{text-align:center; color:var(--warn); font-size:12.5px}
+  td.flag-ok{text-align:center; color:var(--muted); font-size:12.5px}
+  tfoot td{position:sticky; bottom:0; z-index:2; background:var(--head); font-weight:600;
+     padding:8px 12px; border-top:1px solid var(--border2); color:var(--accent-300)}
+  tfoot td:first-child{left:0; z-index:3; color:var(--text)}
+  .count{color:var(--muted); font-size:12.5px; margin-top:10px}
+
+  footer{display:flex; flex-wrap:wrap; gap:6px 20px; align-items:center; margin-top:auto;
+         padding:14px clamp(16px,4vw,28px); border-top:1px solid rgba(233,233,237,.08);
+         font-size:12.5px}
+  footer a{text-decoration:none}
+
   @media (max-width:700px){
-    body{padding:10px}
-    .meta{gap:12px; padding:10px 12px}
+    .meta{gap:10px 18px; padding:10px 12px}
     .controls{gap:8px}
     th,td{padding:6px 8px; font-size:12.5px}
+    .btn{min-height:44px}
+    .field{max-width:none}
   }
 </style>
 </head>
 <body>
-  <div id="drop">
-    <div id="dropTitle">Перетащите файл <b>.K20</b> сюда или нажмите для выбора</div>
-    <div id="scanStatus" class="status hidden"></div>
-    <div id="permBox" class="hidden">
-      <button id="btnPerm">Разрешить доступ к файлам</button>
-      <div class="status">Нужно один раз — чтобы читать архивы с диска пульта</div>
-    </div>
-    <div id="manualBox" class="hidden" style="margin-top:16px">
-      <button id="btnManual" class="ghost">Выбрать файл вручную</button>
-    </div>
-    <div id="fileList" class="filelist"></div>
-  </div>
+  <header>
+    <div class="brand">ЛУЧ-МК: показания в 1 клик</div>
+    <nav>
+      <a href="https://github.com/seregqaaa/karat" target="_blank" rel="noopener" aria-label="GitHub">
+        <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+      </a>
+    </nav>
+  </header>
+
+  <main id="home">
+    <section class="hero">
+      <div class="kicker">Без КАРАТ-Экспресс</div>
+      <h1>Архив с пульта ЛУЧ-МК — таблица и Excel-отчёт за минуту</h1>
+      <p class="sub">Бесплатный просмотр посуточных архивов .K20 теплосчётчиков КАРАТ. Всё считается в браузере: ничего не устанавливается и никуда не отправляется.</p>
+      <div class="steps" id="steps">
+        <div class="step"><b>ШАГ 1</b><span>Считайте архив прибора пультом ЛУЧ-МК</span></div>
+        <div class="step"><b>ШАГ 2</b><span>Перетащите файл .K20 на эту страницу</span></div>
+        <div class="step"><b>ШАГ 3</b><span>Проверьте период и сохраните Excel-отчёт</span></div>
+      </div>
+      <div id="drop">
+        <div id="dropTitle">Перетащите файл <b>.K20</b> сюда</div>
+        <button class="btn" id="btnPick" type="button">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V5m0 0l-4 4m4-4l4 4"/><path d="M4 17v2a1.5 1.5 0 0 0 1.5 1.5h13A1.5 1.5 0 0 0 20 19v-2"/></svg>
+          Выбрать файл
+        </button>
+        <div id="scanStatus" class="status hidden"></div>
+        <div id="permBox" class="hidden">
+          <button class="btn" id="btnPerm" type="button">Разрешить доступ к файлам</button>
+          <div class="status">Нужно один раз — чтобы читать архивы с диска пульта</div>
+        </div>
+        <div id="manualBox" class="hidden" style="margin-top:16px">
+          <button class="btn ghost" id="btnManual" type="button">Выбрать файл вручную</button>
+        </div>
+        <div id="fileList" class="filelist"></div>
+      </div>
+      <div class="sample">
+        <button class="btn ghost" id="btnSample" type="button">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12Z"/><circle cx="12" cy="12" r="2.6"/></svg>
+          Посмотреть на примере
+        </button>
+      </div>
+    </section>
+    <section class="cards">
+      <a href="https://www.karat-npo.com/" target="_blank" rel="noopener"><b>НПО «КАРАТ» ↗</b><span>производитель приборов учёта</span></a>
+      <a href="https://www.karat-npo.com/catalog/kommunikatsionnye_ustroystva/karat_913_pult_perenosa_dannykh_luch_mk/" target="_blank" rel="noopener"><b>Пульт ЛУЧ-МК ↗</b><span>КАРАТ-913, перенос данных</span></a>
+      <a href="https://github.com/seregqaaa/karat" target="_blank" rel="noopener"><b>GitHub проекта ↗</b><span>исходный код и вопросы</span></a>
+    </section>
+  </main>
   <input type="file" id="fileInput" class="hidden" accept=".k20,.K20">
 
   <div id="app" class="hidden">
+    <div class="meta">
+      <div><span>Прибор</span><b id="mDevice">—</b></div>
+      <div><span>Номер</span><b id="mSerial">—</b></div>
+      <div><span>Архив</span><b id="mArch">—</b></div>
+      <div><span>Файл</span><b class="file" id="mFile">—</b></div>
+    </div>
     <div class="controls">
-      <div><label>С</label><input type="date" id="dFrom"></div>
-      <div><label>По</label><input type="date" id="dTo"></div>
-      <span style="flex:1"></span>
-      <button id="btnSave">Сохранить</button>
-      <button class="ghost" id="btnOther">Выбрать файл</button>
+      <button class="btn ghost" id="btnMonth" type="button">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15.5" rx="1.5"/><path d="M3.5 9.5h17M8 2.8V6m8-3.2V6"/></svg>
+        За последний месяц
+      </button>
+      <div class="field"><label for="dFrom">С</label><input type="date" id="dFrom"></div>
+      <div class="field"><label for="dTo">По</label><input type="date" id="dTo"></div>
+      <span class="spacer"></span>
+      <button class="btn" id="btnSave" type="button">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v10m0 0l-4-4m4 4l4-4"/><path d="M4 17v2a1.5 1.5 0 0 0 1.5 1.5h13A1.5 1.5 0 0 0 20 19v-2"/></svg>
+        Сохранить в Excel
+      </button>
+      <button class="btn ghost" id="btnOther" type="button">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a1.5 1.5 0 0 1 1.5-1.5h4l2 2.5h9A1.5 1.5 0 0 1 21 9.5v8A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5V7Z"/></svg>
+        Другой файл
+      </button>
     </div>
     <div class="tablewrap"><table id="tbl"></table></div>
+    <div class="count" id="countLine"></div>
   </div>
+
+  <footer>
+    <a href="https://www.karat-npo.com/" target="_blank" rel="noopener">НПО «КАРАТ» ↗</a>
+    <a href="https://www.karat-npo.com/catalog/kommunikatsionnye_ustroystva/karat_913_pult_perenosa_dannykh_luch_mk/" target="_blank" rel="noopener">Пульт ЛУЧ-МК ↗</a>
+    <a href="https://github.com/seregqaaa/karat" target="_blank" rel="noopener">GitHub</a>
+  </footer>
 
 <script>
 const DELPHI_EPOCH = Date.UTC(1899,11,30);
 const GLYPHS = {"ѕ":"под","ј":"обр"}; // cp1251 0xBE, 0xBC
 const ER_FLAGS = {1:"Bat"};
 let ARC = null; // {names, rows, meta}
+let SORT = {key:null, dir:1};
 
 // ===== Android-мост (в APK) и память настроек =====
 const BRIDGE = window.AndroidBridge || null;
@@ -167,15 +309,9 @@ const iso = d => d.toISOString().slice(0,10);
 
 // ===== Точность как в отчёте «КАРАТ-Экспресс» (проверено по двум эталонным
 // Excel-отчётам, 60 строк + итоги, 0 расхождений) =====
-// Отчётное значение = half-up(отображение прибора, знаки отчёта):
-//   T1под/T1обр/dT1: прибор 3 знака -> отчёт 2 знака (каскад: 0.13471->0.135->0.14)
-//   V1под/V1обр/dV1: прибор 5 знаков -> отчёт 1 знак
-//   Q1под/Наработка: прибор 5 знаков -> отчёт 2 знака
 function chainRound(v, viewDec, repDec){
   const neg = v < 0 ? -1 : 1, av = Math.abs(v);
-  // шаг 1: значение, как его показывает прибор (целые "view-единицы")
   let t = Math.round(parseFloat(av.toFixed(viewDec)) * Math.pow(10, viewDec));
-  // шаг 2: точное десятичное half-up до знаков отчёта
   const m = Math.pow(10, viewDec - repDec);
   const h = Math.floor(t/m) + (t % m >= m/2 ? 1 : 0);
   return neg * h / Math.pow(10, repDec);
@@ -188,9 +324,10 @@ function rep(name, v){
   if (isV(name)) return chainRound(v, 5, 1);
   return chainRound(v, 5, 2);
 }
-// формат с обрезкой хвостовых нулей: 24, 1,7, 71,97, 0
-const fmtN = (v, name) => v.toLocaleString("ru-RU",
+const fmtN = (v, name) => (Object.is(v, -0) ? 0 : v).toLocaleString("ru-RU",
   {minimumFractionDigits:0, maximumFractionDigits:decFor(name)});
+
+const capFirst = s => s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : s;
 
 function load(buf, fname){
   let arc;
@@ -200,12 +337,15 @@ function load(buf, fname){
 }
 function show(arc, fname){
   ARC = arc;
-  document.getElementById("drop").classList.add("hidden");
+  SORT = {key:null, dir:1};
+  document.getElementById("home").classList.add("hidden");
   document.getElementById("app").classList.remove("hidden");
   const m = ARC.meta, rows = ARC.rows;
+  document.getElementById("mDevice").textContent = capFirst(m.device) || "—";
+  document.getElementById("mSerial").textContent = m.serial || "—";
+  document.getElementById("mArch").textContent = (m.archive.split(".")[0] || "Посуточный архив").trim();
+  document.getElementById("mFile").textContent = fname || "—";
   // авто-диапазон: со дня, следующего за датой «по» последней выгрузки
-  // (сохраняется кнопкой «Сохранить», отдельно для каждого прибора);
-  // до первой отправки начальная дата — 23.06.2026
   const first = rows[0].date, last = rows[rows.length-1].date;
   const saved = prefGet("lastExportTo:" + m.serial);
   let fromIso = saved ? nextDayIso(saved) : "";
@@ -227,14 +367,34 @@ function filtered(){
     return (!f || d >= f) && (!t || d <= t);
   });
 }
+function sorted(rows){
+  if (!SORT.key) return rows;
+  const k = SORT.key, dir = SORT.dir;
+  return rows.slice().sort((a,b) => {
+    const av = k === "date" ? a.date.getTime() : a.vals[k];
+    const bv = k === "date" ? b.date.getTime() : b.vals[k];
+    if (typeof av === "string" || typeof bv === "string")
+      return dir * String(av).localeCompare(String(bv), "ru");
+    return dir * (av - bv);
+  });
+}
+function toggleSort(key){
+  if (SORT.key === key) {
+    if (SORT.dir < 0) SORT = {key:null, dir:1};
+    else SORT.dir = -1;
+  } else SORT = {key, dir:1};
+  render();
+}
 function render(){
-  const rows = filtered(), names = ARC.names.slice(1);
-  let html = "<thead><tr><th>Дата</th>" + names.map(n=>`<th>${n}</th>`).join("") + "</tr></thead><tbody>";
+  const rows = sorted(filtered()), names = ARC.names.slice(1);
+  const ind = k => SORT.key === k ? `<span class="ind">${SORT.dir>0?" ↑":" ↓"}</span>` : "";
+  let html = `<thead><tr><th data-sort="date" title="Сортировать">Дата${ind("date")}</th>` +
+    names.map(n=>`<th data-sort="${n}" title="Сортировать">${n}${ind(n)}</th>`).join("") + "</tr></thead><tbody>";
   for (const r of rows){
     html += `<tr><td>${fmtD(r.date)}</td>` + names.map(n => {
       const v = r.vals[n];
       if (typeof v === "string")
-        return `<td class="flag">${v || "Ok"}</td>`;
+        return v ? `<td class="flag">${v}</td>` : `<td class="flag-ok">Ok</td>`;
       return `<td>${fmtN(rep(n, v), n)}</td>`;
     }).join("") + "</tr>";
   }
@@ -246,9 +406,13 @@ function render(){
     }).join("") + "</tr></tfoot>";
   }
   document.getElementById("tbl").innerHTML = html;
+  document.querySelectorAll("#tbl th").forEach(th =>
+    th.onclick = () => toggleSort(th.dataset.sort));
+  const days = rows.length;
+  document.getElementById("countLine").textContent =
+    days + " " + (days % 10 === 1 && days % 100 !== 11 ? "сутки" : "суток") + " в выбранном периоде";
 }
 // Итог как в оригинальном отчёте: сумма построчно округлённых значений
-// (в целых единицах точности колонки — без накопления двоичной погрешности)
 function total(rows, n){
   const f = Math.pow(10, decFor(n));
   return rows.reduce((a,r) => a + Math.round(rep(n, r.vals[n])*f), 0) / f;
@@ -271,17 +435,42 @@ drop.onclick = () => BRIDGE ? autoScan() : fi.click();
 drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
 drop.ondragleave = () => drop.classList.remove("over");
 drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); handleFile(e.dataTransfer.files[0]); };
-fi.onchange = () => handleFile(fi.files[0]);
+fi.onchange = () => { handleFile(fi.files[0]); fi.value = ""; };
 function handleFile(f){ if (!f) return; f.arrayBuffer().then(buf => load(buf, f.name)); }
 document.getElementById("dFrom").onchange = render;
 document.getElementById("dTo").onchange = render;
+document.getElementById("btnMonth").onclick = () => {
+  if (!ARC || !ARC.rows.length) return;
+  const first = ARC.rows[0].date, last = ARC.rows[ARC.rows.length-1].date;
+  let from = new Date(Date.UTC(last.getUTCFullYear(), last.getUTCMonth()-1, last.getUTCDate()+1));
+  if (from < first) from = first;
+  setRange(from, last);
+};
+
+// ===== «Посмотреть на примере» =====
+document.getElementById("btnSample").onclick = e => {
+  e.stopPropagation();
+  const names = ["Время","T1под","T1обр","dT1","V1под","V1обр","dV1","Q1под","Наработка H0","Er0"];
+  const mk = (y,mo,d,vals,er) => {
+    const r = {date:new Date(Date.UTC(y,mo,d)), vals:{}};
+    names.slice(1,9).forEach((n,i)=>r.vals[n]=vals[i]);
+    r.vals["Er0"]=er;
+    return r;
+  };
+  show({names, rows:[
+    mk(2026,5,24,[65.664,41.031,24.633,1.30012,1.30144,0.00132,0.03761,24],""),
+    mk(2026,5,25,[66.121,40.879,25.242,1.20401,1.20388,-0.00013,0.03949,24],""),
+    mk(2026,5,26,[64.973,41.302,23.671,1.19832,1.19951,0.00119,0.03312,24],""),
+    mk(2026,5,27,[66.398,40.522,25.876,1.30215,1.30187,-0.00028,0.04102,24],""),
+    mk(2026,5,28,[65.207,41.113,24.094,1.20117,1.20095,-0.00022,0.03688,24],"Bat;"),
+    mk(2026,5,29,[66.031,40.698,25.333,1.20296,1.20301,0.00005,0.03854,24],"")
+  ], meta:{device:"КАРАТ-Компакт", archive:"Посуточный архив.", serial:"1234567"}}, "пример.K20");
+};
 
 // ===== «Сохранить»: отчёт в формате выгрузки оригинальной программы =====
 const RU_MONTHS = ["январь","февраль","март","апрель","май","июнь",
                    "июль","август","сентябрь","октябрь","ноябрь","декабрь"];
-const capFirst = s => s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : s;
 
-// строит лист в формате эталона выгрузки
 function buildReport(){
   const rows = filtered(), names = ARC.names.slice(1), m = ARC.meta;
   const fIso = document.getElementById("dFrom").value,
@@ -295,7 +484,6 @@ function buildReport(){
   const aoa = [
     ["Архив прибора:" + capFirst(m.device) + " (" + m.serial + ")." + archType,
      null, null, base.replace(/_/g, " ")],
-    // строка 2: номер эльфа (в эталонных выгрузках эта строка пуста)
     m.serial ? [(m.device || "прибор").toUpperCase() + " № " + m.serial] : [],
     ["Дата", ...names.map(n => headerMap[n] || n)],
   ];
@@ -316,7 +504,6 @@ function buildReport(){
   return {wb, fname: base + ".xlsx"};
 }
 
-// «Сохранить» — отчёт сохраняется на устройство
 document.getElementById("btnSave").onclick = () => {
   if (!ARC) return;
   if (typeof XLSX === "undefined"){
@@ -331,7 +518,7 @@ document.getElementById("btnSave").onclick = () => {
   } else {
     XLSX.writeFile(wb, fname);
   }
-  rememberExport(); // дата «по» запоминается — следующее открытие начнётся со следующего дня
+  rememberExport();
 };
 document.getElementById("btnOther").onclick = () => fi.click();
 
@@ -390,7 +577,6 @@ function processList(list){
     setStatus("Файлы .k20 найдены, но прочитать их не удалось — проверьте пульт.");
     return;
   }
-  // свежайший посуточный архив на каждый прибор
   const bySerial = new Map();
   for (const it of daily){
     const s = it.arc.meta.serial;
@@ -415,24 +601,22 @@ function processList(list){
   }
 }
 window.onUsbAttached = () => {
-  // пульт подключили, когда приложение уже открыто — перечитать
   document.getElementById("app").classList.add("hidden");
-  document.getElementById("drop").classList.remove("hidden");
+  document.getElementById("home").classList.remove("hidden");
   scanning = false;
   autoScan();
 };
 window.onAppResumed = () => {
-  // возврат из настроек доступа к файлам
   if (BRIDGE && !ARC && !scanning) autoScan();
 };
 if (BRIDGE){
   dropTitle.innerHTML = "Подключите пульт <b>ЛУЧ-МК</b> по USB" +
     "<br><span style='font-size:12px;color:var(--muted)'>архив считается автоматически; касание — повторить поиск</span>";
+  document.getElementById("btnPick").classList.add("hidden");
   document.getElementById("btnPerm").onclick = ev => {
     ev.stopPropagation();
     try { BRIDGE.requestStorageAccess(); } catch(e){}
   };
-  // ручной выбор файла через системный диалог Android
   document.getElementById("manualBox").classList.remove("hidden");
   document.getElementById("btnManual").onclick = ev => {
     ev.stopPropagation();
@@ -440,6 +624,10 @@ if (BRIDGE){
   };
   autoScan();
 }
+
+// ===== PWA: офлайн-кэш (только по http/https — в APK и с file:// не работает и не нужен) =====
+if ("serviceWorker" in navigator && /^https?:$/.test(location.protocol))
+  addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
 </script>
 </body>
 </html>
