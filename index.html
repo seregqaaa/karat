@@ -245,10 +245,6 @@ if (typeof XLSX === "undefined")
       <div class="field"><label for="dFrom">С</label><input type="date" id="dFrom"></div>
       <div class="field"><label for="dTo">По</label><input type="date" id="dTo"></div>
       <span class="spacer"></span>
-      <button class="btn" id="btnSend" type="button" hidden>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 3L10 14"/><path d="M21 3l-7 18-4-7-7-4 18-7Z"/></svg>
-        Отправить
-      </button>
       <button class="btn" id="btnSave" type="button">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v10m0 0l-4-4m4 4l4-4"/><path d="M4 17v2a1.5 1.5 0 0 0 1.5 1.5h13A1.5 1.5 0 0 0 20 19v-2"/></svg>
         Сохранить в Excel
@@ -556,15 +552,15 @@ document.getElementById("btnSave").onclick = () => {
 };
 document.getElementById("btnOther").onclick = () => fi.click();
 
-// «Отправить» — только в APK: адрес берётся из config.js, который кладётся
-// в assets при сборке приложения и на сайте отсутствует
-document.getElementById("btnSend").onclick = async () => {
+// «Отправить» существует только в APK: кнопку создаёт addSendButton() после
+// загрузки config.js из assets приложения. На сайте этого файла нет — ни кнопки,
+// ни адреса отправки в разметке не появляется.
+async function sendReport(btn){
   if (!ARC || !window.SEND_URL) return;
   if (typeof XLSX === "undefined"){
     alert("Библиотека Excel не загрузилась — проверьте соединение");
     return;
   }
-  const btn = document.getElementById("btnSend");
   btn.disabled = true;
   try {
     const {wb, fname} = buildReport();
@@ -587,7 +583,20 @@ document.getElementById("btnSend").onclick = async () => {
   } finally {
     btn.disabled = false;
   }
-};
+}
+
+function addSendButton(){
+  const btn = document.createElement("button");
+  btn.className = "btn";
+  btn.type = "button";
+  btn.id = "btnSend";
+  btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" ' +
+    'stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" ' +
+    'aria-hidden="true"><path d="M21 3L10 14"/><path d="M21 3l-7 18-4-7-7-4 18-7Z"/></svg>Отправить';
+  btn.onclick = () => sendReport(btn);
+  const save = document.getElementById("btnSave");
+  save.parentNode.insertBefore(btn, save);
+}
 
 // ===== Авто-режим в приложении (Android) =====
 const dropTitle = document.getElementById("dropTitle");
@@ -689,11 +698,11 @@ if (BRIDGE){
     ev.stopPropagation();
     fi.click();
   };
-  // конфиг с адресом отправки подгружается только в APK (config.js в assets);
-  // кнопка «Отправить» появляется, лишь если конфиг есть и задан SEND_URL
+  // конфиг с адресом отправки лежит в assets приложения; на сайте его нет,
+  // поэтому кнопка «Отправить» там не создаётся
   const cfg = document.createElement("script");
   cfg.src = "config.js";
-  cfg.onload = () => { if (window.SEND_URL) document.getElementById("btnSend").hidden = false; };
+  cfg.onload = () => { if (window.SEND_URL) addSendButton(); };
   document.head.appendChild(cfg);
   autoScan();
 }
