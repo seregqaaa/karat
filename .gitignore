@@ -3,7 +3,7 @@ node_modules/
 
 # серверная часть — пока не публикуется
 mail-server.mjs
-yc-function.mjs
+yc-function.*
 test-mail.mjs
 package.json
 package-lock.json
