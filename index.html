@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>K20 Viewer — посуточные архивы КАРАТ</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script>
+// оффлайн-запас для APK: если CDN недоступен, взять локальную копию из assets
+if (typeof XLSX === "undefined")
+  document.write('<script src="xlsx.full.min.js"><\/script>');
+</script>
+<style>
+  :root{
+    --bg:#101418; --panel:#1a2027; --panel2:#212934; --border:#2e3a47;
+    --text:#e8edf2; --muted:#8b98a5; --accent:#4da3ff; --accent2:#79c0ff;
+    --ok:#57c87b; --warn:#e8b44a;
+  }
+  *{box-sizing:border-box; margin:0; padding:0}
+  body{background:var(--bg); color:var(--text); font:14px/1.5 "Segoe UI",system-ui,sans-serif; padding:24px}
+  h1{font-size:20px; font-weight:600; margin-bottom:4px}
+  .sub{color:var(--muted); margin-bottom:20px; font-size:13px}
+  #drop{border:2px dashed var(--border); border-radius:12px; padding:40px; text-align:center;
+        color:var(--muted); cursor:pointer; transition:.15s; background:var(--panel)}
+  #drop.over,#drop:hover{border-color:var(--accent); color:var(--accent2)}
+  #drop b{color:var(--text)}
+  .hidden{display:none!important}
+  .meta{display:flex; gap:24px; flex-wrap:wrap; background:var(--panel); border:1px solid var(--border);
+        border-radius:10px; padding:14px 18px; margin:18px 0}
+  .meta div span{display:block; color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.05em}
+  .meta div b{font-size:15px; font-weight:600}
+  .controls{display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap; margin-bottom:16px}
+  .controls label{display:block; color:var(--muted); font-size:11px; text-transform:uppercase;
+                  letter-spacing:.05em; margin-bottom:4px}
+  select,input[type=date]{background:var(--panel2); color:var(--text); border:1px solid var(--border);
+        border-radius:8px; padding:8px 10px; font-size:14px; color-scheme:dark}
+  button{background:var(--accent); color:#0b1420; border:none; border-radius:8px; padding:9px 16px;
+         font-size:14px; font-weight:600; cursor:pointer}
+  button:hover{background:var(--accent2)}
+  button.ghost{background:var(--panel2); color:var(--text); border:1px solid var(--border)}
+  button.ghost:hover{border-color:var(--accent)}
+  .tablewrap{overflow:auto; border:1px solid var(--border); border-radius:10px; max-height:70vh}
+  table{border-collapse:collapse; width:100%; font-variant-numeric:tabular-nums}
+  th,td{padding:7px 12px; text-align:right; white-space:nowrap; border-bottom:1px solid var(--border)}
+  th{position:sticky; top:0; background:var(--panel2); font-weight:600; font-size:12.5px; z-index:1}
+  td:first-child,th:first-child{text-align:left; position:sticky; left:0; background:var(--panel)}
+  th:first-child{background:var(--panel2); z-index:2}
+  tbody tr:hover td{background:#232d39}
+  tbody tr:hover td:first-child{background:#232d39}
+  td.flag{color:var(--warn); text-align:center}
+  tfoot td{background:var(--panel2); font-weight:600; border-top:2px solid var(--border);
+           position:sticky; bottom:0}
+  tfoot td:first-child{background:var(--panel2); z-index:2}
+  .count{color:var(--muted); font-size:13px; margin:10px 2px}
+  .note{color:var(--muted); font-size:12px; margin-top:12px}
+  .status{margin-top:14px; font-size:13px; color:var(--accent2)}
+  .filelist{margin-top:14px; display:flex; flex-direction:column; gap:8px; align-items:center}
+  .filelist button{background:var(--panel2); color:var(--text); border:1px solid var(--border);
+    font-weight:400; width:100%; max-width:420px; text-align:left}
+  .filelist button b{color:var(--accent2)}
+  #permBox{margin-top:16px}
+  @media (max-width:700px){
+    body{padding:10px}
+    .meta{gap:12px; padding:10px 12px}
+    .controls{gap:8px}
+    th,td{padding:6px 8px; font-size:12.5px}
+  }
+</style>
+</head>
+<body>
+  <div id="drop">
+    <div id="dropTitle">Перетащите файл <b>.K20</b> сюда или нажмите для выбора</div>
+    <div id="scanStatus" class="status hidden"></div>
+    <div id="permBox" class="hidden">
+      <button id="btnPerm">Разрешить доступ к файлам</button>
+      <div class="status">Нужно один раз — чтобы читать архивы с диска пульта</div>
+    </div>
+    <div id="manualBox" class="hidden" style="margin-top:16px">
+      <button id="btnManual" class="ghost">Выбрать файл вручную</button>
+    </div>
+    <div id="fileList" class="filelist"></div>
+  </div>
+  <input type="file" id="fileInput" class="hidden" accept=".k20,.K20">
+
+  <div id="app" class="hidden">
+    <div class="controls">
+      <div><label>С</label><input type="date" id="dFrom"></div>
+      <div><label>По</label><input type="date" id="dTo"></div>
+      <span style="flex:1"></span>
+      <button id="btnSave">Сохранить</button>
+      <button class="ghost" id="btnOther">Выбрать файл</button>
+    </div>
+    <div class="tablewrap"><table id="tbl"></table></div>
+  </div>
+
+<script>
+const DELPHI_EPOCH = Date.UTC(1899,11,30);
+const GLYPHS = {"ѕ":"под","ј":"обр"}; // cp1251 0xBE, 0xBC
+const ER_FLAGS = {1:"Bat"};
+let ARC = null; // {names, rows, meta}
+
+// ===== Android-мост (в APK) и память настроек =====
+const BRIDGE = window.AndroidBridge || null;
+function prefGet(k){
+  if (BRIDGE) { try { return BRIDGE.getPref(k) || ""; } catch(e){ return ""; } }
+  try { return localStorage.getItem(k) || ""; } catch(e){ return ""; }
+}
+function prefSet(k, v){
+  if (BRIDGE) { try { BRIDGE.setPref(k, v); } catch(e){} return; }
+  try { localStorage.setItem(k, v); } catch(e){}
+}
+function rememberExport(){
+  if (!ARC) return;
+  const to = document.getElementById("dTo").value;
+  if (to) prefSet("lastExportTo:" + ARC.meta.serial, to);
+}
+function nextDayIso(isoStr){
+  const t = Date.parse(isoStr + "T00:00:00Z");
+  return isNaN(t) ? "" : new Date(t + 86400000).toISOString().slice(0,10);
+}
+
+function readShortStrings(bytes, pos, maxLen){
+  const dec = new TextDecoder("windows-1251"), out = [];
+  while (pos < bytes.length){
+    const ln = bytes[pos];
+    if (ln === 0 || ln > maxLen) break;
+    out.push(dec.decode(bytes.subarray(pos+1, pos+1+ln)));
+    pos += 1 + ln;
+  }
+  return [out, pos];
+}
+function decodeEr0(v){
+  const b = new DataView(new ArrayBuffer(4));
+  b.setFloat32(0, v, true);
+  let bits = b.getUint32(0, true);
+  if (!bits) return "";
+  const parts = [];
+  for (let i=0;i<32;i++) if (bits & (1<<i)) parts.push(ER_FLAGS[1<<i] || ("Er"+i));
+  return parts.join(";")+";";
+}
+function parseK20(buf){
+  const dv = new DataView(buf), bytes = new Uint8Array(buf);
+  const count = dv.getUint16(2, true);
+  let [rawNames, pos] = readShortStrings(bytes, 0x39, 0x20);
+  const names = rawNames.map(n => n.replace(/[ѕј]/g, c => GLYPHS[c]));
+  const C = names.length;
+  const cols = [];
+  for (let c=0; c<C; c++){
+    const col = new Float64Array(count);
+    for (let i=0;i<count;i++) col[i] = dv.getFloat64(pos + (c*count+i)*8, true);
+    cols.push(col);
+  }
+  const [metaStr] = readShortStrings(bytes, pos + C*count*8 + 128, 255);
+  const rows = [];
+  for (let i=0;i<count;i++){
+    const date = new Date(DELPHI_EPOCH + cols[0][i]*86400000);
+    const r = {date, vals:{}};
+    for (let c=1;c<C;c++)
+      r.vals[names[c]] = names[c]==="Er0" ? decodeEr0(cols[c][i]) : cols[c][i];
+    rows.push(r);
+  }
+  return {names, rows, meta:{device:metaStr[0]||"", archive:metaStr[1]||"", serial:metaStr[2]||""}};
+}
+
+const fmtD = d => String(d.getUTCDate()).padStart(2,"0")+"."+String(d.getUTCMonth()+1).padStart(2,"0")+"."+d.getUTCFullYear();
+const iso = d => d.toISOString().slice(0,10);
+
+// ===== Точность как в отчёте «КАРАТ-Экспресс» (проверено по двум эталонным
+// Excel-отчётам, 60 строк + итоги, 0 расхождений) =====
+// Отчётное значение = half-up(отображение прибора, знаки отчёта):
+//   T1под/T1обр/dT1: прибор 3 знака -> отчёт 2 знака (каскад: 0.13471->0.135->0.14)
+//   V1под/V1обр/dV1: прибор 5 знаков -> отчёт 1 знак
+//   Q1под/Наработка: прибор 5 знаков -> отчёт 2 знака
+function chainRound(v, viewDec, repDec){
+  const neg = v < 0 ? -1 : 1, av = Math.abs(v);
+  // шаг 1: значение, как его показывает прибор (целые "view-единицы")
+  let t = Math.round(parseFloat(av.toFixed(viewDec)) * Math.pow(10, viewDec));
+  // шаг 2: точное десятичное half-up до знаков отчёта
+  const m = Math.pow(10, viewDec - repDec);
+  const h = Math.floor(t/m) + (t % m >= m/2 ? 1 : 0);
+  return neg * h / Math.pow(10, repDec);
+}
+const isT = n => /^(T1|dT)/.test(n);
+const isV = n => /^(V1|dV)/.test(n);
+const decFor = n => isV(n) ? 1 : 2;
+function rep(name, v){
+  if (isT(name)) return chainRound(v, 3, 2);
+  if (isV(name)) return chainRound(v, 5, 1);
+  return chainRound(v, 5, 2);
+}
+// формат с обрезкой хвостовых нулей: 24, 1,7, 71,97, 0
+const fmtN = (v, name) => v.toLocaleString("ru-RU",
+  {minimumFractionDigits:0, maximumFractionDigits:decFor(name)});
+
+function load(buf, fname){
+  let arc;
+  try { arc = parseK20(buf); }
+  catch(e){ alert("Не удалось разобрать файл: "+e.message); return; }
+  show(arc, fname);
+}
+function show(arc, fname){
+  ARC = arc;
+  document.getElementById("drop").classList.add("hidden");
+  document.getElementById("app").classList.remove("hidden");
+  const m = ARC.meta, rows = ARC.rows;
+  // авто-диапазон: со дня, следующего за датой «по» последней выгрузки
+  // (сохраняется кнопкой «Сохранить», отдельно для каждого прибора);
+  // до первой отправки начальная дата — 23.06.2026
+  const first = rows[0].date, last = rows[rows.length-1].date;
+  const saved = prefGet("lastExportTo:" + m.serial);
+  let fromIso = saved ? nextDayIso(saved) : "";
+  if (!fromIso) fromIso = "2026-06-23"; // стартовое значение до первой отправки
+  let from = new Date(Date.parse(fromIso + "T00:00:00Z"));
+  if (!(from > first)) from = first;
+  if (from > last) from = last;
+  setRange(from, last);
+}
+function setRange(a,b){
+  document.getElementById("dFrom").value = iso(a);
+  document.getElementById("dTo").value = iso(b);
+  render();
+}
+function filtered(){
+  const f = document.getElementById("dFrom").value, t = document.getElementById("dTo").value;
+  return ARC.rows.filter(r => {
+    const d = iso(r.date);
+    return (!f || d >= f) && (!t || d <= t);
+  });
+}
+function render(){
+  const rows = filtered(), names = ARC.names.slice(1);
+  let html = "<thead><tr><th>Дата</th>" + names.map(n=>`<th>${n}</th>`).join("") + "</tr></thead><tbody>";
+  for (const r of rows){
+    html += `<tr><td>${fmtD(r.date)}</td>` + names.map(n => {
+      const v = r.vals[n];
+      if (typeof v === "string")
+        return `<td class="flag">${v || "Ok"}</td>`;
+      return `<td>${fmtN(rep(n, v), n)}</td>`;
+    }).join("") + "</tr>";
+  }
+  html += "</tbody>";
+  if (rows.length){
+    html += "<tfoot><tr><td>Итого:</td>" + names.map(n => {
+      if (n === "Er0") return "<td></td>";
+      return `<td>${fmtN(total(rows, n), n)}</td>`;
+    }).join("") + "</tr></tfoot>";
+  }
+  document.getElementById("tbl").innerHTML = html;
+}
+// Итог как в оригинальном отчёте: сумма построчно округлённых значений
+// (в целых единицах точности колонки — без накопления двоичной погрешности)
+function total(rows, n){
+  const f = Math.pow(10, decFor(n));
+  return rows.reduce((a,r) => a + Math.round(rep(n, r.vals[n])*f), 0) / f;
+}
+// данные текущего отфильтрованного периода — пригодится обработчику «Отправить»
+function exportRows(){
+  const rows = filtered(), names = ARC.names.slice(1);
+  const out = [["Дата",...names], ...rows.map(r =>
+    [fmtD(r.date), ...names.map(n => {
+      const v = r.vals[n];
+      return typeof v === "string" ? (v || "Ok") : rep(n, v);
+    })])];
+  if (rows.length)
+    out.push(["Итого:", ...names.map(n => n === "Er0" ? "" : total(rows, n))]);
+  return out;
+}
+// events
+const drop = document.getElementById("drop"), fi = document.getElementById("fileInput");
+drop.onclick = () => BRIDGE ? autoScan() : fi.click();
+drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); handleFile(e.dataTransfer.files[0]); };
+fi.onchange = () => handleFile(fi.files[0]);
+function handleFile(f){ if (!f) return; f.arrayBuffer().then(buf => load(buf, f.name)); }
+document.getElementById("dFrom").onchange = render;
+document.getElementById("dTo").onchange = render;
+
+// ===== «Сохранить»: отчёт в формате выгрузки оригинальной программы =====
+const RU_MONTHS = ["январь","февраль","март","апрель","май","июнь",
+                   "июль","август","сентябрь","октябрь","ноябрь","декабрь"];
+const capFirst = s => s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : s;
+
+// строит лист в формате эталона выгрузки
+function buildReport(){
+  const rows = filtered(), names = ARC.names.slice(1), m = ARC.meta;
+  const fIso = document.getElementById("dFrom").value,
+        tIso = document.getElementById("dTo").value;
+  const fd = new Date(Date.parse(fIso + "T00:00:00Z")),
+        td = new Date(Date.parse(tIso + "T00:00:00Z"));
+  const base = "отчет_данных_" + RU_MONTHS[fd.getUTCMonth()] + "_" +
+               RU_MONTHS[td.getUTCMonth()] + "_" + td.getUTCFullYear();
+  const archType = (m.archive.split(".")[0] || "Посуточный архив").trim();
+  const headerMap = {"Er0":"Причина ненаработки", "Наработка H0":"Наработка", "dV1":"Vo"};
+  const aoa = [
+    ["Архив прибора:" + capFirst(m.device) + " (" + m.serial + ")." + archType,
+     null, null, base.replace(/_/g, " ")],
+    // строка 2: номер эльфа (в эталонных выгрузках эта строка пуста)
+    m.serial ? [(m.device || "прибор").toUpperCase() + " № " + m.serial] : [],
+    ["Дата", ...names.map(n => headerMap[n] || n)],
+  ];
+  for (const r of rows){
+    aoa.push([fmtD(r.date) + " 0:00:00", ...names.map(n => {
+      const v = r.vals[n];
+      if (typeof v === "string") return v ? " " + v : "Ok";
+      return rep(n, v);
+    })]);
+  }
+  if (rows.length)
+    aoa.push(["Итого", ...names.map(n => n === "Er0" ? null : total(rows, n))]);
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!cols"] = [16.63, 22.5, 17, 13.5, 13.63, 11.5, 13.5, 8.43, 11.63, 13.75]
+    .map(w => ({wch: w}));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+  return {wb, fname: base + ".xlsx"};
+}
+
+// «Сохранить» — отчёт сохраняется на устройство
+document.getElementById("btnSave").onclick = () => {
+  if (!ARC) return;
+  if (typeof XLSX === "undefined"){
+    alert("Библиотека Excel не загрузилась — проверьте соединение");
+    return;
+  }
+  const {wb, fname} = buildReport();
+  if (BRIDGE){
+    let path = "";
+    try { path = BRIDGE.saveFile(fname, XLSX.write(wb, {bookType:"xlsx", type:"base64"})); } catch(e){}
+    alert(path ? "Отчёт сохранён в Загрузки:\n" + fname : "Не удалось сохранить отчёт");
+  } else {
+    XLSX.writeFile(wb, fname);
+  }
+  rememberExport(); // дата «по» запоминается — следующее открытие начнётся со следующего дня
+};
+document.getElementById("btnOther").onclick = () => fi.click();
+
+// ===== Авто-режим в приложении (Android) =====
+const dropTitle = document.getElementById("dropTitle");
+const scanStatus = document.getElementById("scanStatus");
+const permBox = document.getElementById("permBox");
+const fileListEl = document.getElementById("fileList");
+let scanning = false;
+
+function setStatus(t){
+  scanStatus.textContent = t;
+  scanStatus.classList.toggle("hidden", !t);
+}
+function b64ToBuf(b64){
+  const bin = atob(b64), n = bin.length, u = new Uint8Array(n);
+  for (let i = 0; i < n; i++) u[i] = bin.charCodeAt(i);
+  return u.buffer;
+}
+function autoScan(){
+  if (!BRIDGE || scanning) return;
+  fileListEl.innerHTML = "";
+  let hasAccess = false;
+  try { hasAccess = BRIDGE.hasStorageAccess(); } catch(e){}
+  if (!hasAccess){
+    permBox.classList.remove("hidden");
+    setStatus("");
+    return;
+  }
+  permBox.classList.add("hidden");
+  scanning = true;
+  const t0 = Date.now();
+  setStatus("Поиск архивов на пульте…");
+  const tick = () => {
+    let list = [];
+    try { list = JSON.parse(BRIDGE.scanArchives() || "[]"); } catch(e){}
+    if (list.length){ scanning = false; processList(list); return; }
+    if (Date.now() - t0 < 20000){ setTimeout(tick, 1000); return; }
+    scanning = false;
+    setStatus("Архивы не найдены. Подключите ЛУЧ-МК по USB через OTG-переходник — диск пульта определится автоматически. Касание по этому полю — повторить поиск.");
+  };
+  tick();
+}
+function processList(list){
+  const daily = [], others = [];
+  for (const f of list){
+    let b64 = "";
+    try { b64 = BRIDGE.readFileB64(f.path); } catch(e){}
+    if (!b64) continue;
+    let arc = null;
+    try { arc = parseK20(b64ToBuf(b64)); } catch(e){ continue; }
+    const item = {f, arc, last: arc.rows.length ? arc.rows[arc.rows.length-1].date : null};
+    (/Посуточ/i.test(arc.meta.archive) ? daily : others).push(item);
+  }
+  if (!daily.length && !others.length){
+    setStatus("Файлы .k20 найдены, но прочитать их не удалось — проверьте пульт.");
+    return;
+  }
+  // свежайший посуточный архив на каждый прибор
+  const bySerial = new Map();
+  for (const it of daily){
+    const s = it.arc.meta.serial;
+    const cur = bySerial.get(s);
+    if (!cur || (it.last && cur.last && cur.last < it.last)) bySerial.set(s, it);
+  }
+  const picks = [...bySerial.values()];
+  if (picks.length === 1){
+    show(picks[0].arc, picks[0].f.name);
+    return;
+  }
+  setStatus(picks.length
+    ? "Найдено несколько приборов — выберите:"
+    : "Посуточных архивов не найдено, есть другие:");
+  for (const it of (picks.length ? picks : others)){
+    const b = document.createElement("button");
+    b.innerHTML = "<b>" + it.arc.meta.device + " № " + it.arc.meta.serial + "</b><br>" +
+      it.arc.meta.archive + "<br>" + it.f.name +
+      (it.last ? " — по " + fmtD(it.last) : "");
+    b.onclick = ev => { ev.stopPropagation(); show(it.arc, it.f.name); };
+    fileListEl.appendChild(b);
+  }
+}
+window.onUsbAttached = () => {
+  // пульт подключили, когда приложение уже открыто — перечитать
+  document.getElementById("app").classList.add("hidden");
+  document.getElementById("drop").classList.remove("hidden");
+  scanning = false;
+  autoScan();
+};
+window.onAppResumed = () => {
+  // возврат из настроек доступа к файлам
+  if (BRIDGE && !ARC && !scanning) autoScan();
+};
+if (BRIDGE){
+  dropTitle.innerHTML = "Подключите пульт <b>ЛУЧ-МК</b> по USB" +
+    "<br><span style='font-size:12px;color:var(--muted)'>архив считается автоматически; касание — повторить поиск</span>";
+  document.getElementById("btnPerm").onclick = ev => {
+    ev.stopPropagation();
+    try { BRIDGE.requestStorageAccess(); } catch(e){}
+  };
+  // ручной выбор файла через системный диалог Android
+  document.getElementById("manualBox").classList.remove("hidden");
+  document.getElementById("btnManual").onclick = ev => {
+    ev.stopPropagation();
+    fi.click();
+  };
+  autoScan();
+}
+</script>
+</body>
+</html>
