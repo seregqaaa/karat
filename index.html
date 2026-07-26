@@ -265,10 +265,144 @@ if (typeof XLSX === "undefined")
   </footer>
 
 <script>
+// ====== K20CORE-BEGIN ======
+// Чистое ядро: разбор .K20 и округление. Без DOM — этот же блок исполняют
+// тесты tests/run.mjs (node), поэтому всё между маркерами должно оставаться
+// самодостаточным.
+const K20_VER = "11";
 const DELPHI_EPOCH = Date.UTC(1899,11,30);
+const DAY_MS = 86400000;
 const GLYPHS = {"ѕ":"под","ј":"обр"}; // cp1251 0xBE, 0xBC
 const ER_FLAGS = {1:"Bat"};
-let ARC = null; // {names, rows, meta}
+// Пределы правдоподобия: защищают от мусора вместо архива. Самые большие
+// известные архивы — почасовой ЭЛЬФ (960 записей); запись ≤ 29 параметров.
+const NAMES_OFF = 0x39, NAME_MAX = 0x20, MAX_COLS = 40, MAX_RECS = 20000;
+const DATE_MIN = Date.UTC(1995,0,1), DATE_MAX = Date.UTC(2100,0,1);
+
+class K20Error extends Error {}
+function bad(msg){ throw new K20Error(msg); }
+
+// Классы колонок — по схеме обозначений КАРАТ (первая буква: Q тепло,
+// G масса, V объём, T температура, P давление, C электроэнергия; приставка
+// d — разность), чтобы многоканальные приборы (T2под, dV2, G1под) попадали
+// в те же правила, что и канал 1 у ЭЛЬФ.
+const isFlagCol = n => /^Er\d*$/.test(n);
+const isDateCol = n => /^(Дата|Время|Date|Time)/i.test(n);
+const isT = n => /^d?[Tt]/.test(n);
+const isV = n => /^d?[VG]/.test(n);
+const decFor = n => isV(n) ? 1 : 2;
+
+function readShortStrings(bytes, pos, maxLen, maxCount){
+  const dec = new TextDecoder("windows-1251"), out = [];
+  while (pos < bytes.length && out.length < (maxCount || 1000)){
+    const ln = bytes[pos];
+    if (ln === 0 || ln > maxLen || pos + 1 + ln > bytes.length) break;
+    out.push(dec.decode(bytes.subarray(pos+1, pos+1+ln)));
+    pos += 1 + ln;
+  }
+  return [out, pos];
+}
+function decodeEr0(v){
+  if (!isFinite(v)) return "";
+  const b = new DataView(new ArrayBuffer(4));
+  b.setFloat32(0, v, true);
+  let bits = b.getUint32(0, true);
+  if (!bits) return "";
+  const parts = [];
+  for (let i=0;i<32;i++) if (bits & (1<<i)) parts.push(ER_FLAGS[1<<i] || ("Er"+i));
+  return parts.join(";")+";";
+}
+function parseK20(buf){
+  if (!buf || buf.byteLength < NAMES_OFF + 16) bad("файл слишком короткий для архива .K20");
+  const dv = new DataView(buf), bytes = new Uint8Array(buf);
+  const count = dv.getUint16(2, true);
+  if (count < 1 || count > MAX_RECS) bad("неправдоподобное число записей в заголовке: " + count);
+  let [rawNames, pos] = readShortStrings(bytes, NAMES_OFF, NAME_MAX, MAX_COLS + 1);
+  const names = rawNames.map(n => n.replace(/[ѕј]/g, c => GLYPHS[c]));
+  const C = names.length;
+  if (C < 2) bad("не найдены имена колонок — это не архив пульта ЛУЧ-МК");
+  if (C > MAX_COLS) bad("неправдоподобное число колонок: " + C);
+  if (!isDateCol(names[0]))
+    bad("первая колонка «" + names[0] + "» — не дата; структура файла не распознана");
+  if (pos + C*count*8 > bytes.length)
+    bad("файл обрезан: данных " + (bytes.length - pos) + " байт вместо " + C*count*8);
+  const cols = [];
+  for (let c=0; c<C; c++){
+    const col = new Float64Array(count);
+    for (let i=0;i<count;i++) col[i] = dv.getFloat64(pos + (c*count+i)*8, true);
+    cols.push(col);
+  }
+  // Хвост: 128 служебных байт, затем ShortString-метаданные (прибор, архив,
+  // номер). Нестандартный хвост — не повод падать: работаем без метаданных.
+  const [metaStr] = readShortStrings(bytes, pos + C*count*8 + 128, 255, 8);
+  const rows = [];
+  let skipped = 0;
+  for (let i=0;i<count;i++){
+    const t = DELPHI_EPOCH + cols[0][i]*DAY_MS;
+    if (!isFinite(t) || t < DATE_MIN || t > DATE_MAX){ skipped++; continue; }
+    const r = {date:new Date(t), vals:{}};
+    for (let c=1;c<C;c++){
+      const v = cols[c][i];
+      r.vals[names[c]] = isFlagCol(names[c]) ? decodeEr0(v) : (isFinite(v) ? v : null);
+    }
+    rows.push(r);
+  }
+  if (!rows.length) bad("в архиве нет ни одной записи с корректной датой");
+  // кольцевой буфер прибора может быть выгружен «с середины» — упорядочиваем
+  rows.sort((a,b) => a.date - b.date);
+  return {names, rows,
+    meta:{device:metaStr[0]||"", archive:metaStr[1]||"", serial:metaStr[2]||""},
+    diag:{records:count, columns:C, skipped, bytes:bytes.length}};
+}
+
+const fmtD = d => String(d.getUTCDate()).padStart(2,"0")+"."+String(d.getUTCMonth()+1).padStart(2,"0")+"."+d.getUTCFullYear();
+const iso = d => d.toISOString().slice(0,10);
+
+// ===== Точность как в отчёте «КАРАТ-Экспресс» (сверено по эталонным
+// Excel-отчётам программы; tests/run.mjs повторяет сверку автоматически) =====
+// Каскад half-up: сначала до viewDec знаков (как на экране программы), затем
+// до repDec (как в отчёте). Целочисленно, по десятичной записи числа — без
+// toFixed: тот делает round-half-to-even и ловит двоичную погрешность
+// ((1.005).toFixed(2) → "1.00", (0.755).toFixed(2) → "0.75").
+function halfUpScaled(av, dec){
+  let s = av.toString();
+  if (s.indexOf("e") >= 0) s = av.toFixed(dec + 2); // редкость: |v| < 1e-6
+  const dot = s.indexOf(".");
+  const ip = dot < 0 ? s : s.slice(0, dot);
+  const fp = (dot < 0 ? "" : s.slice(dot + 1)).padEnd(dec + 1, "0");
+  let n = BigInt(ip + fp.slice(0, dec));
+  if (fp.charCodeAt(dec) >= 53) n += 1n; // следующий знак '5'…'9' — вверх
+  return n;
+}
+function chainRound(v, viewDec, repDec){
+  if (v == null || !isFinite(v) || Math.abs(v) >= 1e15) return v;
+  const neg = v < 0 ? -1 : 1;
+  let n = halfUpScaled(Math.abs(v), viewDec);
+  const m = BigInt(Math.pow(10, viewDec - repDec));
+  const r = n % m;
+  n /= m;
+  if (r * 2n >= m) n += 1n;
+  return neg * Number(n) / Math.pow(10, repDec);
+}
+function rep(name, v){
+  if (v == null) return v;
+  if (isT(name)) return chainRound(v, 3, 2);
+  if (isV(name)) return chainRound(v, 5, 1);
+  return chainRound(v, 5, 2);
+}
+const fmtN = (v, name) => v == null ? "—" : (Object.is(v, -0) ? 0 : v).toLocaleString("ru-RU",
+  {minimumFractionDigits:0, maximumFractionDigits:decFor(name)});
+// Итог как в оригинальном отчёте: сумма построчно округлённых значений
+function total(rows, n){
+  const f = Math.pow(10, decFor(n));
+  return rows.reduce((a,r) => {
+    const v = rep(n, r.vals[n]);
+    return a + (v == null ? 0 : Math.round(v*f));
+  }, 0) / f;
+}
+// ====== K20CORE-END ======
+
+let ARC = null; // {names, rows, meta, diag}
 let SORT = {key:null, dir:1};
 
 // ===== Android-мост (в APK) и память настроек =====
@@ -291,78 +425,43 @@ function nextDayIso(isoStr){
   return isNaN(t) ? "" : new Date(t + 86400000).toISOString().slice(0,10);
 }
 
-function readShortStrings(bytes, pos, maxLen){
-  const dec = new TextDecoder("windows-1251"), out = [];
-  while (pos < bytes.length){
-    const ln = bytes[pos];
-    if (ln === 0 || ln > maxLen) break;
-    out.push(dec.decode(bytes.subarray(pos+1, pos+1+ln)));
-    pos += 1 + ln;
-  }
-  return [out, pos];
-}
-function decodeEr0(v){
-  const b = new DataView(new ArrayBuffer(4));
-  b.setFloat32(0, v, true);
-  let bits = b.getUint32(0, true);
-  if (!bits) return "";
-  const parts = [];
-  for (let i=0;i<32;i++) if (bits & (1<<i)) parts.push(ER_FLAGS[1<<i] || ("Er"+i));
-  return parts.join(";")+";";
-}
-function parseK20(buf){
-  const dv = new DataView(buf), bytes = new Uint8Array(buf);
-  const count = dv.getUint16(2, true);
-  let [rawNames, pos] = readShortStrings(bytes, 0x39, 0x20);
-  const names = rawNames.map(n => n.replace(/[ѕј]/g, c => GLYPHS[c]));
-  const C = names.length;
-  const cols = [];
-  for (let c=0; c<C; c++){
-    const col = new Float64Array(count);
-    for (let i=0;i<count;i++) col[i] = dv.getFloat64(pos + (c*count+i)*8, true);
-    cols.push(col);
-  }
-  const [metaStr] = readShortStrings(bytes, pos + C*count*8 + 128, 255);
-  const rows = [];
-  for (let i=0;i<count;i++){
-    const date = new Date(DELPHI_EPOCH + cols[0][i]*86400000);
-    const r = {date, vals:{}};
-    for (let c=1;c<C;c++)
-      r.vals[names[c]] = names[c]==="Er0" ? decodeEr0(cols[c][i]) : cols[c][i];
-    rows.push(r);
-  }
-  return {names, rows, meta:{device:metaStr[0]||"", archive:metaStr[1]||"", serial:metaStr[2]||""}};
-}
-
-const fmtD = d => String(d.getUTCDate()).padStart(2,"0")+"."+String(d.getUTCMonth()+1).padStart(2,"0")+"."+d.getUTCFullYear();
-const iso = d => d.toISOString().slice(0,10);
-
-// ===== Точность как в отчёте «КАРАТ-Экспресс» (проверено по двум эталонным
-// Excel-отчётам, 60 строк + итоги, 0 расхождений) =====
-function chainRound(v, viewDec, repDec){
-  const neg = v < 0 ? -1 : 1, av = Math.abs(v);
-  let t = Math.round(parseFloat(av.toFixed(viewDec)) * Math.pow(10, viewDec));
-  const m = Math.pow(10, viewDec - repDec);
-  const h = Math.floor(t/m) + (t % m >= m/2 ? 1 : 0);
-  return neg * h / Math.pow(10, repDec);
-}
-const isT = n => /^(T1|dT)/.test(n);
-const isV = n => /^(V1|dV)/.test(n);
-const decFor = n => isV(n) ? 1 : 2;
-function rep(name, v){
-  if (isT(name)) return chainRound(v, 3, 2);
-  if (isV(name)) return chainRound(v, 5, 1);
-  return chainRound(v, 5, 2);
-}
-const fmtN = (v, name) => (Object.is(v, -0) ? 0 : v).toLocaleString("ru-RU",
-  {minimumFractionDigits:0, maximumFractionDigits:decFor(name)});
-
 const capFirst = s => s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : s;
 
+// Диагностический файл вместо телеметрии: пользователь сам решает, что прислать
+function saveDiag(buf, fname, why){
+  const head = new Uint8Array(buf.slice(0, 96));
+  let hex = "";
+  head.forEach(x => { hex += x.toString(16).padStart(2, "0") + " "; });
+  const txt = [
+    "Диагностика K20Viewer (версия " + K20_VER + ")",
+    "Файл: " + (fname || "?"),
+    "Размер: " + buf.byteLength + " байт",
+    "Ошибка: " + why,
+    "Первые байты: " + hex.trim(),
+    "Когда: " + new Date().toISOString(),
+  ].join("\r\n") + "\r\n";
+  const dn = "k20_диагностика.txt";
+  if (BRIDGE){
+    let path = "";
+    try { path = BRIDGE.saveFile(dn, btoa(unescape(encodeURIComponent(txt)))); } catch(e){}
+    alert(path ? "Сохранено в Загрузки:\n" + dn : "Не удалось сохранить диагностику");
+    return;
+  }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([txt], {type:"text/plain"}));
+  a.download = dn;
+  a.click();
+}
 function load(buf, fname){
   let arc;
   try { arc = parseK20(buf); }
-  catch(e){ alert("Не удалось разобрать файл: "+e.message); return; }
+  catch(e){
+    const why = e instanceof K20Error ? e.message : "неожиданная ошибка (" + e.message + ")";
+    if (confirm("Не удалось разобрать «" + (fname || "файл") + "»:\n" + why + ".\n\n" +
+        "Сохранить диагностический файл, чтобы приложить его к вопросу разработчику?"))
+      saveDiag(buf, fname, why);
+    return;
+  }
   show(arc, fname);
 }
 function show(arc, fname){
@@ -416,8 +515,8 @@ function toggleSort(key){
   render();
 }
 function render(){
-  // Er0 показываем только в отчёте («Причина ненаработки»), в таблице скрыт
-  const rows = sorted(filtered()), names = ARC.names.slice(1).filter(n => n !== "Er0");
+  // Er* показываем только в отчёте («Причина ненаработки»), в таблице скрыты
+  const rows = sorted(filtered()), names = ARC.names.slice(1).filter(n => !isFlagCol(n));
   const ind = k => SORT.key === k ? `<span class="ind">${SORT.dir>0?" ↑":" ↓"}</span>` : "";
   let html = `<thead><tr><th data-sort="date" title="Сортировать">Дата${ind("date")}</th>` +
     names.map(n=>`<th data-sort="${n}" title="Сортировать">${n}${ind(n)}</th>`).join("") + "</tr></thead><tbody>";
@@ -431,10 +530,8 @@ function render(){
   }
   html += "</tbody>";
   if (rows.length){
-    html += "<tfoot><tr><td>Итого:</td>" + names.map(n => {
-      if (n === "Er0") return "<td></td>";
-      return `<td>${fmtN(total(rows, n), n)}</td>`;
-    }).join("") + "</tr></tfoot>";
+    html += "<tfoot><tr><td>Итого:</td>" + names.map(n =>
+      `<td>${fmtN(total(rows, n), n)}</td>`).join("") + "</tr></tfoot>";
   }
   document.getElementById("tbl").innerHTML = html;
   document.querySelectorAll("#tbl th").forEach(th =>
@@ -442,11 +539,9 @@ function render(){
   const days = rows.length;
   document.getElementById("countLine").textContent =
     days + " " + (days % 10 === 1 && days % 100 !== 11 ? "сутки" : "суток") + " в выбранном периоде";
-}
-// Итог как в оригинальном отчёте: сумма построчно округлённых значений
-function total(rows, n){
-  const f = Math.pow(10, decFor(n));
-  return rows.reduce((a,r) => a + Math.round(rep(n, r.vals[n])*f), 0) / f;
+  const cl = document.getElementById("countLine");
+  if (cl && ARC.diag && ARC.diag.skipped)
+    cl.textContent += " · повреждённых записей пропущено: " + ARC.diag.skipped;
 }
 // данные текущего отфильтрованного периода — пригодится обработчику «Отправить»
 function exportRows(){
@@ -457,7 +552,7 @@ function exportRows(){
       return typeof v === "string" ? (v || "Ok") : rep(n, v);
     })])];
   if (rows.length)
-    out.push(["Итого:", ...names.map(n => n === "Er0" ? "" : total(rows, n))]);
+    out.push(["Итого:", ...names.map(n => isFlagCol(n) ? "" : total(rows, n))]);
   return out;
 }
 // events
@@ -481,7 +576,7 @@ document.getElementById("btnMonth").onclick = () => {
 // ===== «Посмотреть на примере» =====
 document.getElementById("btnSample").onclick = e => {
   e.stopPropagation();
-  const names = ["Время","T1под","T1обр","dT1","V1под","V1обр","dV1","Q1под","Наработка H0","Er0"];
+  const names = ["Дата","T1под","T1обр","dT1","V1под","V1обр","dV1","Q1под","Наработка H0","Er0"];
   const mk = (y,mo,d,vals,er) => {
     const r = {date:new Date(Date.UTC(y,mo,d)), vals:{}};
     names.slice(1,9).forEach((n,i)=>r.vals[n]=vals[i]);
@@ -526,10 +621,12 @@ function buildReport(){
     })]);
   }
   if (rows.length)
-    aoa.push(["Итого", ...names.map(n => n === "Er0" ? null : total(rows, n))]);
+    aoa.push(["Итого", ...names.map(n => isFlagCol(n) ? null : total(rows, n))]);
   const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws["!cols"] = [16.63, 22.5, 17, 13.5, 13.63, 11.5, 13.5, 8.43, 11.63, 13.75]
-    .map(w => ({wch: w}));
+  // ширины сверены с выгрузкой КАРАТ-Экспресс; лишним колонкам — по 12
+  const widths = [16.63, 22.5, 17, 13.5, 13.63, 11.5, 13.5, 8.43, 11.63, 13.75];
+  while (widths.length < names.length + 1) widths.push(12);
+  ws["!cols"] = widths.map(w => ({wch: w}));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
   return {wb, fname: base + ".xlsx"};
@@ -670,8 +767,9 @@ function processList(list){
     : "Посуточных архивов не найдено, есть другие:");
   for (const it of (picks.length ? picks : others)){
     const b = document.createElement("button");
-    b.innerHTML = "<b>" + it.arc.meta.device + " № " + it.arc.meta.serial + "</b><br>" +
-      it.arc.meta.archive + "<br>" + it.f.name +
+    b.innerHTML = "<b>" + (it.arc.meta.device || "Прибор") +
+      (it.arc.meta.serial ? " № " + it.arc.meta.serial : "") + "</b><br>" +
+      (it.arc.meta.archive || "архив без описания") + "<br>" + it.f.name +
       (it.last ? " — по " + fmtD(it.last) : "");
     b.onclick = ev => { ev.stopPropagation(); show(it.arc, it.f.name); };
     fileListEl.appendChild(b);
