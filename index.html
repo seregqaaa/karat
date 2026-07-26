@@ -407,14 +407,12 @@ const RU_MONTHS = ["январь","февраль","март","апрель","м
 // Содержимое отчёта в формате выгрузки оригинальной программы: строки листа
 // (aoa), имя файла и ширины колонок. Чистая функция — тесты сверяют её выход
 // с эталонными выгрузками «КАРАТ-Экспресс». names — колонки без «Дата».
-// address — адрес объекта (config.js): попадает в заголовок листа, но не в имя
-// файла — при отправке префикс к имени добавляет облачная функция.
-function buildAoa(rows, names, meta, fIso, tIso, address){
+function buildAoa(rows, names, meta, fIso, tIso){
   const fd = new Date(Date.parse(fIso + "T00:00:00Z")),
         td = new Date(Date.parse(tIso + "T00:00:00Z"));
   const base = "отчет_данных_" + RU_MONTHS[fd.getUTCMonth()] + "_" +
                RU_MONTHS[td.getUTCMonth()] + "_" + td.getUTCFullYear();
-  const title = ((address ? address + "_" : "") + base).replace(/_/g, " ");
+  const title = base.replace(/_/g, " ");
   const archType = (meta.archive.split(".")[0] || "Посуточный архив").trim();
   const headerMap = {"Er0":"Причина ненаработки", "Наработка H0":"Наработка", "dV1":"Vo"};
   const aoa = [
@@ -631,8 +629,7 @@ document.getElementById("btnSample").onclick = e => {
 // ===== «Сохранить»: отчёт в формате выгрузки оригинальной программы =====
 function buildReport(){
   const {aoa, fname, widths} = buildAoa(filtered(), ARC.names.slice(1), ARC.meta,
-    document.getElementById("dFrom").value, document.getElementById("dTo").value,
-    window.SEND_ADDRESS || "");
+    document.getElementById("dFrom").value, document.getElementById("dTo").value);
   const ws = XLSX.utils.aoa_to_sheet(aoa);
   ws["!cols"] = widths.map(w => ({wch: w}));
   const wb = XLSX.utils.book_new();
