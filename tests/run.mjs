@@ -559,13 +559,13 @@ head("xlsx: отчёт — валидный файл с теми же данны
     eq(bad, 0, "обратное чтение полным SheetJS без потерь (" + checked + " ячеек)");
   }
 
-  // ---- ветка APK: write(type:'base64') даёт тот же валидный файл
+  // ---- write(type:'base64') даёт тот же валидный файл
   {
     const b64 = LIB.write(wb, {bookType: "xlsx", type: "base64", compression: true});
     ok(typeof b64 === "string" && /^[A-Za-z0-9+/=]+$/.test(b64), "base64-строка корректна");
     let z2 = null;
     try { z2 = unzip(Buffer.from(b64, "base64")); } catch (e) { ok(false, "base64-распаковка: " + e.message); }
-    if (z2) ok(z2.has("xl/workbook.xml"), "base64-ветка (APK) — тот же валидный xlsx");
+    if (z2) ok(z2.has("xl/workbook.xml"), "base64-ветка — тот же валидный xlsx");
   }
 }
 

@@ -34,7 +34,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <script src="xlsx.write.js"></script>
 <script>
-// локальная копия — основной путь (сайт, APK, офлайн): свой мини-писатель xlsx
+// локальная копия — основной путь (сайт, офлайн): свой мини-писатель xlsx
 // (~14 КБ вместо 880 КБ SheetJS). CDN с полным SheetJS — запас, если
 // index.html открыт отдельным файлом без xlsx.write.js рядом.
 if (typeof XLSX === "undefined")
@@ -96,14 +96,6 @@ if (typeof XLSX === "undefined")
   #drop.over,#drop:hover{border-color:var(--accent)}
   #drop b{color:var(--text)}
   #dropTitle{margin-bottom:12px}
-  .status{margin-top:14px; font-size:13px; color:var(--accent-300)}
-  .filelist{margin-top:14px; display:flex; flex-direction:column; gap:8px; align-items:center}
-  .filelist button{background:transparent; color:var(--text); border:1px solid var(--border2);
-    border-radius:var(--radius); padding:9px 14px; font-weight:400; width:100%;
-    max-width:420px; text-align:left}
-  .filelist button:hover{border-color:var(--accent)}
-  .filelist button b{color:var(--accent-300)}
-  #permBox{margin-top:16px}
   .sample{margin-top:12px}
   .sample .btn{font-size:12.5px}
 
@@ -206,15 +198,6 @@ if (typeof XLSX === "undefined")
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V5m0 0l-4 4m4-4l4 4"/><path d="M4 17v2a1.5 1.5 0 0 0 1.5 1.5h13A1.5 1.5 0 0 0 20 19v-2"/></svg>
           Выбрать файл
         </button>
-        <div id="scanStatus" class="status hidden"></div>
-        <div id="permBox" class="hidden">
-          <button class="btn" id="btnPerm" type="button">Разрешить доступ к файлам</button>
-          <div class="status">Нужно один раз — чтобы читать архивы с диска пульта</div>
-        </div>
-        <div id="manualBox" class="hidden" style="margin-top:16px">
-          <button class="btn ghost" id="btnManual" type="button">Выбрать файл вручную</button>
-        </div>
-        <div id="fileList" class="filelist"></div>
       </div>
       <div class="sample">
         <button class="btn ghost" id="btnSample" type="button">
@@ -440,14 +423,11 @@ function buildAoa(rows, names, meta, fIso, tIso){
 let ARC = null; // {names, rows, meta, diag}
 let SORT = {key:null, dir:1};
 
-// ===== Android-мост (в APK) и память настроек =====
-const BRIDGE = window.AndroidBridge || null;
+// ===== память настроек =====
 function prefGet(k){
-  if (BRIDGE) { try { return BRIDGE.getPref(k) || ""; } catch(e){ return ""; } }
   try { return localStorage.getItem(k) || ""; } catch(e){ return ""; }
 }
 function prefSet(k, v){
-  if (BRIDGE) { try { BRIDGE.setPref(k, v); } catch(e){} return; }
   try { localStorage.setItem(k, v); } catch(e){}
 }
 function rememberExport(){
@@ -474,12 +454,6 @@ function saveDiag(buf, fname, why){
     "Когда: " + new Date().toISOString(),
   ].join("\r\n") + "\r\n";
   const dn = "k20_диагностика.txt";
-  if (BRIDGE){
-    let path = "";
-    try { path = BRIDGE.saveFile(dn, btoa(unescape(encodeURIComponent(txt)))); } catch(e){}
-    alert(path ? "Сохранено в Загрузки:\n" + dn : "Не удалось сохранить диагностику");
-    return;
-  }
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([txt], {type:"text/plain"}));
   a.download = dn;
@@ -590,7 +564,7 @@ function exportRows(){
 }
 // events
 const drop = document.getElementById("drop"), fi = document.getElementById("fileInput");
-drop.onclick = () => BRIDGE ? autoScan() : fi.click();
+drop.onclick = () => fi.click();
 drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
 drop.ondragleave = () => drop.classList.remove("over");
 drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); handleFile(e.dataTransfer.files[0]); };
@@ -644,174 +618,12 @@ document.getElementById("btnSave").onclick = async () => {
     return;
   }
   const {wb, fname} = buildReport();
-  if (BRIDGE){
-    let path = "";
-    try { path = BRIDGE.saveFile(fname, await XLSX.write(wb, {bookType:"xlsx", type:"base64", compression:true})); } catch(e){}
-    alert(path ? "Отчёт сохранён в Загрузки:\n" + fname : "Не удалось сохранить отчёт");
-  } else {
-    await XLSX.writeFile(wb, fname, {compression:true});
-  }
+  await XLSX.writeFile(wb, fname, {compression:true});
   rememberExport();
 };
 document.getElementById("btnOther").onclick = () => fi.click();
 
-// «Отправить» существует только в APK: кнопку создаёт addSendButton() после
-// загрузки config.js из assets приложения. На сайте этого файла нет — ни кнопки,
-// ни адреса отправки в разметке не появляется.
-async function sendReport(btn){
-  if (!ARC || !window.SEND_URL) return;
-  if (typeof XLSX === "undefined"){
-    alert("Библиотека Excel не загрузилась — проверьте соединение");
-    return;
-  }
-  btn.disabled = true;
-  try {
-    const {wb, fname} = buildReport();
-    const headers = {
-      "Content-Type": "application/octet-stream",
-      "X-Filename": encodeURIComponent(fname),
-    };
-    if (window.SEND_ADDRESS) headers["X-Address"] = encodeURIComponent(window.SEND_ADDRESS);
-    const resp = await fetch(window.SEND_URL, {
-      method: "POST",
-      headers,
-      body: await XLSX.write(wb, {bookType:"xlsx", type:"array", compression:true}),
-    });
-    const ans = await resp.json().catch(() => ({}));
-    if (!resp.ok || !ans.ok) throw new Error(ans.error || "HTTP " + resp.status);
-    rememberExport();
-    alert("Письмо отправлено:\n" + fname);
-  } catch (e) {
-    alert("Не удалось отправить: " + e.message);
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-function addSendButton(){
-  const btn = document.createElement("button");
-  btn.className = "btn";
-  btn.type = "button";
-  btn.id = "btnSend";
-  btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" ' +
-    'stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" ' +
-    'aria-hidden="true"><path d="M21 3L10 14"/><path d="M21 3l-7 18-4-7-7-4 18-7Z"/></svg>Отправить';
-  btn.onclick = () => sendReport(btn);
-  const save = document.getElementById("btnSave");
-  save.parentNode.insertBefore(btn, save);
-}
-
-// ===== Авто-режим в приложении (Android) =====
-const dropTitle = document.getElementById("dropTitle");
-const scanStatus = document.getElementById("scanStatus");
-const permBox = document.getElementById("permBox");
-const fileListEl = document.getElementById("fileList");
-let scanning = false;
-
-function setStatus(t){
-  scanStatus.textContent = t;
-  scanStatus.classList.toggle("hidden", !t);
-}
-function b64ToBuf(b64){
-  const bin = atob(b64), n = bin.length, u = new Uint8Array(n);
-  for (let i = 0; i < n; i++) u[i] = bin.charCodeAt(i);
-  return u.buffer;
-}
-function autoScan(){
-  if (!BRIDGE || scanning) return;
-  fileListEl.innerHTML = "";
-  let hasAccess = false;
-  try { hasAccess = BRIDGE.hasStorageAccess(); } catch(e){}
-  if (!hasAccess){
-    permBox.classList.remove("hidden");
-    setStatus("");
-    return;
-  }
-  permBox.classList.add("hidden");
-  scanning = true;
-  const t0 = Date.now();
-  setStatus("Поиск архивов на пульте…");
-  const tick = () => {
-    let list = [];
-    try { list = JSON.parse(BRIDGE.scanArchives() || "[]"); } catch(e){}
-    if (list.length){ scanning = false; processList(list); return; }
-    if (Date.now() - t0 < 20000){ setTimeout(tick, 1000); return; }
-    scanning = false;
-    setStatus("Архивы не найдены. Подключите ЛУЧ-МК по USB через OTG-переходник — диск пульта определится автоматически. Касание по этому полю — повторить поиск.");
-  };
-  tick();
-}
-function processList(list){
-  const daily = [], others = [];
-  for (const f of list){
-    let b64 = "";
-    try { b64 = BRIDGE.readFileB64(f.path); } catch(e){}
-    if (!b64) continue;
-    let arc = null;
-    try { arc = parseK20(b64ToBuf(b64)); } catch(e){ continue; }
-    const item = {f, arc, last: arc.rows.length ? arc.rows[arc.rows.length-1].date : null};
-    (/Посуточ/i.test(arc.meta.archive) ? daily : others).push(item);
-  }
-  if (!daily.length && !others.length){
-    setStatus("Файлы .k20 найдены, но прочитать их не удалось — проверьте пульт.");
-    return;
-  }
-  const bySerial = new Map();
-  for (const it of daily){
-    const s = it.arc.meta.serial;
-    const cur = bySerial.get(s);
-    if (!cur || (it.last && cur.last && cur.last < it.last)) bySerial.set(s, it);
-  }
-  const picks = [...bySerial.values()];
-  if (picks.length === 1){
-    show(picks[0].arc, picks[0].f.name);
-    return;
-  }
-  setStatus(picks.length
-    ? "Найдено несколько приборов — выберите:"
-    : "Посуточных архивов не найдено, есть другие:");
-  for (const it of (picks.length ? picks : others)){
-    const b = document.createElement("button");
-    b.innerHTML = "<b>" + (it.arc.meta.device || "Прибор") +
-      (it.arc.meta.serial ? " № " + it.arc.meta.serial : "") + "</b><br>" +
-      (it.arc.meta.archive || "архив без описания") + "<br>" + it.f.name +
-      (it.last ? " — по " + fmtD(it.last) : "");
-    b.onclick = ev => { ev.stopPropagation(); show(it.arc, it.f.name); };
-    fileListEl.appendChild(b);
-  }
-}
-window.onUsbAttached = () => {
-  document.getElementById("app").classList.add("hidden");
-  document.getElementById("home").classList.remove("hidden");
-  scanning = false;
-  autoScan();
-};
-window.onAppResumed = () => {
-  if (BRIDGE && !ARC && !scanning) autoScan();
-};
-if (BRIDGE){
-  dropTitle.innerHTML = "Подключите пульт <b>ЛУЧ-МК</b> по USB" +
-    "<br><span style='font-size:12px;color:var(--muted)'>архив считается автоматически; касание — повторить поиск</span>";
-  document.getElementById("btnPick").classList.add("hidden");
-  document.getElementById("btnPerm").onclick = ev => {
-    ev.stopPropagation();
-    try { BRIDGE.requestStorageAccess(); } catch(e){}
-  };
-  document.getElementById("manualBox").classList.remove("hidden");
-  document.getElementById("btnManual").onclick = ev => {
-    ev.stopPropagation();
-    fi.click();
-  };
-  // конфиг с адресом отправки лежит в assets приложения; на сайте его нет,
-  // поэтому кнопка «Отправить» там не создаётся
-  const cfg = document.createElement("script");
-  cfg.src = "config.js";
-  cfg.onload = () => { if (window.SEND_URL) addSendButton(); };
-  document.head.appendChild(cfg);
-  autoScan();
-}
-
-// ===== PWA: офлайн-кэш (только по http/https — в APK и с file:// не работает и не нужен) =====
+// ===== PWA: офлайн-кэш (только по http/https; с file:// не работает и не нужен) =====
 if ("serviceWorker" in navigator && /^https?:$/.test(location.protocol))
   addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
 </script>
