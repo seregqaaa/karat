@@ -1,8 +1,8 @@
 // Офлайн-кэш «ЛУЧ-МК: показания в 1 клик».
 // При изменении любого файла из ASSETS поднять версию CACHE — иначе
 // установленные PWA продолжат работать со старой копией.
-const CACHE = "k20-viewer-v11";
-const ASSETS = ["./", "index.html", "xlsx.full.min.js", "manifest.json",
+const CACHE = "k20-viewer-v12";
+const ASSETS = ["./", "index.html", "xlsx.write.js", "manifest.json",
                 "icon-180.png", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", e => {

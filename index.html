@@ -32,10 +32,11 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<script src="xlsx.full.min.js"></script>
+<script src="xlsx.write.js"></script>
 <script>
-// локальная копия — основной путь (сайт, APK, офлайн); CDN — запас,
-// если index.html открыт отдельным файлом без xlsx.full.min.js рядом
+// локальная копия — основной путь (сайт, APK, офлайн): свой мини-писатель xlsx
+// (~14 КБ вместо 880 КБ SheetJS). CDN с полным SheetJS — запас, если
+// index.html открыт отдельным файлом без xlsx.write.js рядом.
 if (typeof XLSX === "undefined")
   document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"><\/script>');
 </script>
@@ -400,6 +401,39 @@ function total(rows, n){
     return a + (v == null ? 0 : Math.round(v*f));
   }, 0) / f;
 }
+const capFirst = s => s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : s;
+const RU_MONTHS = ["январь","февраль","март","апрель","май","июнь",
+                   "июль","август","сентябрь","октябрь","ноябрь","декабрь"];
+// Содержимое отчёта в формате выгрузки оригинальной программы: строки листа
+// (aoa), имя файла и ширины колонок. Чистая функция — тесты сверяют её выход
+// с эталонными выгрузками «КАРАТ-Экспресс». names — колонки без «Дата».
+function buildAoa(rows, names, meta, fIso, tIso){
+  const fd = new Date(Date.parse(fIso + "T00:00:00Z")),
+        td = new Date(Date.parse(tIso + "T00:00:00Z"));
+  const base = "отчет_данных_" + RU_MONTHS[fd.getUTCMonth()] + "_" +
+               RU_MONTHS[td.getUTCMonth()] + "_" + td.getUTCFullYear();
+  const archType = (meta.archive.split(".")[0] || "Посуточный архив").trim();
+  const headerMap = {"Er0":"Причина ненаработки", "Наработка H0":"Наработка", "dV1":"Vo"};
+  const aoa = [
+    ["Архив прибора:" + capFirst(meta.device) + " (" + meta.serial + ")." + archType,
+     null, null, base.replace(/_/g, " ")],
+    meta.serial ? [(meta.device || "прибор").toUpperCase() + " № " + meta.serial] : [],
+    ["Дата", ...names.map(n => headerMap[n] || n)],
+  ];
+  for (const r of rows){
+    aoa.push([fmtD(r.date) + " 0:00:00", ...names.map(n => {
+      const v = r.vals[n];
+      if (typeof v === "string") return v ? " " + v : "Ok";
+      return rep(n, v);
+    })]);
+  }
+  if (rows.length)
+    aoa.push(["Итого", ...names.map(n => isFlagCol(n) ? null : total(rows, n))]);
+  // ширины сверены с выгрузкой КАРАТ-Экспресс; лишним колонкам — по 12
+  const widths = [16.63, 22.5, 17, 13.5, 13.63, 11.5, 13.5, 8.43, 11.63, 13.75];
+  while (widths.length < names.length + 1) widths.push(12);
+  return {aoa, fname: base + ".xlsx", widths};
+}
 // ====== K20CORE-END ======
 
 let ARC = null; // {names, rows, meta, diag}
@@ -424,8 +458,6 @@ function nextDayIso(isoStr){
   const t = Date.parse(isoStr + "T00:00:00Z");
   return isNaN(t) ? "" : new Date(t + 86400000).toISOString().slice(0,10);
 }
-
-const capFirst = s => s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : s;
 
 // Диагностический файл вместо телеметрии: пользователь сам решает, что прислать
 function saveDiag(buf, fname, why){
@@ -594,45 +626,17 @@ document.getElementById("btnSample").onclick = e => {
 };
 
 // ===== «Сохранить»: отчёт в формате выгрузки оригинальной программы =====
-const RU_MONTHS = ["январь","февраль","март","апрель","май","июнь",
-                   "июль","август","сентябрь","октябрь","ноябрь","декабрь"];
-
 function buildReport(){
-  const rows = filtered(), names = ARC.names.slice(1), m = ARC.meta;
-  const fIso = document.getElementById("dFrom").value,
-        tIso = document.getElementById("dTo").value;
-  const fd = new Date(Date.parse(fIso + "T00:00:00Z")),
-        td = new Date(Date.parse(tIso + "T00:00:00Z"));
-  const base = "отчет_данных_" + RU_MONTHS[fd.getUTCMonth()] + "_" +
-               RU_MONTHS[td.getUTCMonth()] + "_" + td.getUTCFullYear();
-  const archType = (m.archive.split(".")[0] || "Посуточный архив").trim();
-  const headerMap = {"Er0":"Причина ненаработки", "Наработка H0":"Наработка", "dV1":"Vo"};
-  const aoa = [
-    ["Архив прибора:" + capFirst(m.device) + " (" + m.serial + ")." + archType,
-     null, null, base.replace(/_/g, " ")],
-    m.serial ? [(m.device || "прибор").toUpperCase() + " № " + m.serial] : [],
-    ["Дата", ...names.map(n => headerMap[n] || n)],
-  ];
-  for (const r of rows){
-    aoa.push([fmtD(r.date) + " 0:00:00", ...names.map(n => {
-      const v = r.vals[n];
-      if (typeof v === "string") return v ? " " + v : "Ok";
-      return rep(n, v);
-    })]);
-  }
-  if (rows.length)
-    aoa.push(["Итого", ...names.map(n => isFlagCol(n) ? null : total(rows, n))]);
+  const {aoa, fname, widths} = buildAoa(filtered(), ARC.names.slice(1), ARC.meta,
+    document.getElementById("dFrom").value, document.getElementById("dTo").value);
   const ws = XLSX.utils.aoa_to_sheet(aoa);
-  // ширины сверены с выгрузкой КАРАТ-Экспресс; лишним колонкам — по 12
-  const widths = [16.63, 22.5, 17, 13.5, 13.63, 11.5, 13.5, 8.43, 11.63, 13.75];
-  while (widths.length < names.length + 1) widths.push(12);
   ws["!cols"] = widths.map(w => ({wch: w}));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
-  return {wb, fname: base + ".xlsx"};
+  return {wb, fname};
 }
 
-document.getElementById("btnSave").onclick = () => {
+document.getElementById("btnSave").onclick = async () => {
   if (!ARC) return;
   if (typeof XLSX === "undefined"){
     alert("Библиотека Excel не загрузилась — проверьте соединение");
@@ -641,10 +645,10 @@ document.getElementById("btnSave").onclick = () => {
   const {wb, fname} = buildReport();
   if (BRIDGE){
     let path = "";
-    try { path = BRIDGE.saveFile(fname, XLSX.write(wb, {bookType:"xlsx", type:"base64", compression:true})); } catch(e){}
+    try { path = BRIDGE.saveFile(fname, await XLSX.write(wb, {bookType:"xlsx", type:"base64", compression:true})); } catch(e){}
     alert(path ? "Отчёт сохранён в Загрузки:\n" + fname : "Не удалось сохранить отчёт");
   } else {
-    XLSX.writeFile(wb, fname, {compression:true});
+    await XLSX.writeFile(wb, fname, {compression:true});
   }
   rememberExport();
 };
@@ -670,7 +674,7 @@ async function sendReport(btn){
     const resp = await fetch(window.SEND_URL, {
       method: "POST",
       headers,
-      body: XLSX.write(wb, {bookType:"xlsx", type:"array", compression:true}),
+      body: await XLSX.write(wb, {bookType:"xlsx", type:"array", compression:true}),
     });
     const ans = await resp.json().catch(() => ({}));
     if (!resp.ok || !ans.ok) throw new Error(ans.error || "HTTP " + resp.status);
