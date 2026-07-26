@@ -476,7 +476,15 @@ head("xlsx: отчёт — валидный файл с теми же данны
   const names = arc.names.slice(1);
   const fIso = arc.rows[0].date.toISOString().slice(0, 10);
   const tIso = arc.rows[arc.rows.length - 1].date.toISOString().slice(0, 10);
-  const {aoa, fname, widths} = C.buildAoa(arc.rows, names, arc.meta, fIso, tIso);
+  // адрес объекта (config.js, только в APK) идёт в заголовок листа, но НЕ в имя
+  // файла: при отправке префикс к имени добавляет облачная функция
+  const ADDR = "Тестовая_1"; // настоящий адрес лежит в config.js и в git не попадает
+  const plain = C.buildAoa(arc.rows, names, arc.meta, fIso, tIso);
+  ok(/^отчет данных [а-я]+ [а-я]+ \d{4}$/.test(plain.aoa[0][3]),
+     "без адреса заголовок листа прежний: " + plain.aoa[0][3]);
+  const {aoa, fname, widths} = C.buildAoa(arc.rows, names, arc.meta, fIso, tIso, ADDR);
+  eq(aoa[0][3], "Тестовая 1 " + plain.aoa[0][3], "адрес попал в заголовок листа");
+  eq(fname, plain.fname, "имя файла от адреса не зависит");
   ok(/^отчет_данных_[а-я]+_[а-я]+_\d{4}\.xlsx$/.test(fname), "имя файла по шаблону: " + fname);
   eq(aoa.length, arc.rows.length + 4, "строк в отчёте: шапка(3) + данные + Итого");
 
