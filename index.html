@@ -182,6 +182,25 @@
          font-size:12.5px}
   footer a{text-decoration:none}
 
+  /* Диалог адреса объекта перед сохранением — только на сайте: в сборке APK
+     адрес приходит из config.js, и эти стили уезжают вместе со стилями подвала. */
+  #addrDlg{width:100%; max-width:min(420px,calc(100vw - 32px)); padding:0;
+        background:var(--bg); color:var(--text);
+        border:1px solid var(--border2); border-radius:var(--radius)}
+  #addrDlg::backdrop{background:rgba(10,11,20,.62)}
+  .addr{display:flex; flex-direction:column; padding:18px 20px 20px}
+  .addr h2{font-size:15px; font-weight:600}
+  .addr p{font-size:12.5px; color:var(--muted); text-wrap:pretty; margin:6px 0 14px}
+  .addr label{color:var(--muted); font-size:11px; text-transform:uppercase;
+        letter-spacing:.05em; margin-bottom:4px}
+  .addr input{width:100%; min-height:36px; background:rgba(233,233,237,.05);
+        color:var(--text); border:1px solid var(--border2); border-radius:var(--radius);
+        padding:6px 10px; font:inherit; font-size:13.5px}
+  .addr input:hover{border-color:rgba(233,233,237,.3)}
+  .addr input:focus-visible{border-color:var(--accent); outline-offset:0}
+  .addr-btns{display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end; margin-top:16px}
+  .addr-btns .btn:disabled{opacity:.45; cursor:default; background:transparent}
+
   @media (max-width:700px){
     .meta{gap:10px 18px; padding:10px 12px}
     .controls{gap:8px}
@@ -298,6 +317,23 @@
     <a href="https://www.karat-npo.com/upload/iblock/7e6/%D0%9F%D1%83%D0%BB%D1%8C%D1%82%20%D0%BF%D0%B5%D1%80%D0%B5%D0%BD%D0%BE%D1%81%D0%B0%20%D0%B4%D0%B0%D0%BD%D0%BD%D1%8B%D1%85%20%D0%9A%D0%90%D0%A0%D0%90%D0%A2-913%20%20%D0%9B%D1%83%D1%87-%D0%9C%D0%9A%20%D1%80%D1%83%D0%BA%D0%BE%D0%B2%D0%BE%D0%B4%D1%81%D1%82%D0%B2%D0%BE.pdf" target="_blank" rel="noopener">Пульт ЛУЧ-МК ↗</a>
     <a href="https://github.com/seregqaaa/karat" target="_blank" rel="noopener">GitHub</a>
   </footer>
+
+  <!-- Спрашиваем адрес объекта перед сохранением: он идёт в заголовок листа и в
+       имя файла. Разметка стоит после подвала намеренно — сборка APK вырезает
+       всё от <footer> до скрипта, а там адрес и так берётся из config.js. -->
+  <dialog id="addrDlg" aria-labelledby="addrTitle">
+    <form method="dialog" class="addr">
+      <h2 id="addrTitle">Адрес объекта</h2>
+      <p>Попадёт в заголовок отчёта и в имя файла — удобно, когда объектов несколько. Можно сохранить и как есть.</p>
+      <label for="addrInput">Адрес</label>
+      <input type="text" id="addrInput" maxlength="60" autocomplete="off"
+             enterkeyhint="done" placeholder="Например: Ясная 6">
+      <div class="addr-btns">
+        <button type="button" class="btn ghost" id="addrSkip">Сохранить как есть</button>
+        <button type="submit" class="btn" id="addrOk" value="ok">Сохранить с адресом</button>
+      </div>
+    </form>
+  </dialog>
 
 <script>
 // ====== Интерфейс страницы ======
@@ -531,15 +567,23 @@ function render(){
 
 // ---- отчёт ------------------------------------------------------------------
 // Формат — как у выгрузки оригинальной программы; сама раскладка в buildAoa
-// (k20.core.js), здесь только вызов писателя xlsx.
-function buildReport(){
-  const {aoa, fname, widths} = buildAoa(filtered(), ARC.names.slice(1), ARC.meta,
+// (k20.core.js), здесь только вызов писателя xlsx и адрес объекта.
+function buildReport(addr){
+  const r = buildAoa(filtered(), ARC.names.slice(1), ARC.meta,
     EL.dFrom.value, EL.dTo.value);
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws["!cols"] = widths.map(w => ({wch: w}));
+  // Адрес — как у письма из сборки APK: в заголовке листа через пробелы, в имени
+  // файла через подчёркивания. Там его подставляет свой слой (аргумент пустой),
+  // здесь — диалог перед сохранением. Из имени файла убираем запрещённые в нём
+  // символы, иначе браузер сохранит отчёт под своим именем.
+  const text = (addr || "").trim().replace(/_/g, " ");
+  const slug = text.replace(/[\\/:*?"<>|]+/g, " ").trim().replace(/\s+/g, "_");
+  if (text) r.aoa[0][3] = text + " " + r.aoa[0][3];
+  if (slug) r.fname = slug + "_" + r.fname;
+  const ws = XLSX.utils.aoa_to_sheet(r.aoa);
+  ws["!cols"] = r.widths.map(w => ({wch: w}));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
-  return {wb, fname};
+  return {wb, fname: r.fname};
 }
 
 // ---- события ----------------------------------------------------------------
@@ -568,20 +612,52 @@ onClick(EL.btnMonth, () => {
   setRange(from < first ? first : from, last);
 });
 
-onClick(EL.btnSave, async () => {
+// ---- сохранение отчёта ------------------------------------------------------
+// Адрес помним по заводскому номеру прибора, как и дату «по»: адрес относится к
+// объекту, где прибор стоит, и общий на всех подставлял бы чужой.
+const addrKey = () => ARC && ARC.meta.serial ? "address:" + ARC.meta.serial : "";
+const addrDlg = $("addrDlg"), addrInput = $("addrInput"), addrOk = $("addrOk");
+const syncAddrOk = () => { if (addrOk) addrOk.disabled = !addrInput.value.trim(); };
+
+async function saveReport(addr){
+  try {
+    const {wb, fname} = buildReport(addr);
+    await XLSX.writeFile(wb, fname, {compression: true});
+    rememberExport();
+  } catch(e){
+    alert("Не удалось сохранить отчёт:\n" + e.message);
+  }
+}
+
+if (addrDlg){
+  addrInput.oninput = syncAddrOk;
+  onClick($("addrSkip"), () => addrDlg.close("skip"));
+  // Клик мимо карточки — по самому <dialog>, то есть по затемнению: отмена.
+  addrDlg.onclick = e => { if (e.target === addrDlg) addrDlg.close(); };
+  addrDlg.addEventListener("close", () => {
+    const ans = addrDlg.returnValue;
+    if (ans !== "ok" && ans !== "skip") return;  // Esc или клик по фону — не сохраняем
+    const addr = ans === "ok" ? addrInput.value.trim() : "";
+    if (ans === "ok") prefSet(addrKey(), addr);
+    saveReport(addr);
+  });
+}
+
+onClick(EL.btnSave, () => {
   if (!ARC) return;
   if (typeof XLSX === "undefined"){ alert(NO_XLSX); return; }
   if (!filtered().length){
     alert("В выбранном периоде нет ни одних суток — проверьте даты «С» и «По».");
     return;
   }
-  try {
-    const {wb, fname} = buildReport();
-    await XLSX.writeFile(wb, fname, {compression: true});
-    rememberExport();
-  } catch(e){
-    alert("Не удалось сохранить отчёт:\n" + e.message);
-  }
+  // Диалога нет в сборке APK (адрес приходит из config.js) и в браузерах без
+  // <dialog> — тогда сохраняем сразу, как раньше.
+  if (!addrDlg || !addrDlg.showModal){ saveReport(""); return; }
+  addrInput.value = prefGet(addrKey());
+  syncAddrOk();
+  addrDlg.returnValue = "";   // иначе прошлый ответ сохранит отчёт по Esc
+  addrDlg.showModal();
+  addrInput.select();
 });
 
 // ---- «Посмотреть на примере» ------------------------------------------------
