@@ -17,9 +17,18 @@
   var IS_NODE = typeof process !== "undefined" && process.versions && process.versions.node;
 
   // ---------- утилиты ----------
+  // Управляющие символы XML 1.0 не допускает вообще — даже числовой ссылкой,
+  // поэтому OOXML кодирует их как _xHHHH_ (так же делает SheetJS). Сюда они
+  // попадают из .K20: имена колонок и метаданные прибора читаются как есть.
+  // CR отдельно: конформный парсер молча превратил бы литеральный \r в \n.
+  var BAD_XML = /[\x00-\x08\x0B\x0C\x0E-\x1F\uFFFE\uFFFF]/g;
+  function escChar(c){
+    return "_x" + ("000" + c.charCodeAt(0).toString(16)).slice(-4) + "_";
+  }
   function esc(s){
     return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+      .replace(/>/g, "&gt;").replace(/"/g, "&quot;")
+      .replace(/\r/g, "_x000D_").replace(BAD_XML, escChar);
   }
   function colName(i){ // 0 → A, 26 → AA
     var s = ""; i++;

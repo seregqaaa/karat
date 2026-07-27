@@ -3,6 +3,7 @@ node_modules/
 
 # серверная часть — пока не публикуется
 config.js
+mail-core.js
 mail-server.mjs
 yc-function.*
 test-mail.mjs

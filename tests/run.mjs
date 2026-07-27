@@ -1,8 +1,13 @@
 #!/usr/bin/env node
 // Тесты парсера .K20 и округления. Запуск из корня репозитория: node tests/run.mjs
 //
-// Ядро берётся прямо из index.html (блок между маркерами K20CORE) — тесты
-// гоняют тот же код, что исполняется на странице, без отдельной сборки.
+// Ядро берётся из k20.core.js — того самого файла, который страница подключает
+// обычным <script src>. Отдельной сборки у проекта нет, поэтому тесты гоняют
+// ровно тот код, что исполняется в браузере.
+//
+// Переменные окружения:
+//   PYTHON=py         — чем звать python (по умолчанию python3)
+//   UPDATE_GOLDEN=1   — разрешить запись отсутствующих golden-снапшотов
 //
 // Реальные архивы и эталонные выгрузки КАРАТ-Экспресс кладутся в tests/private/
 // (каталог в .gitignore — данные объекта не публикуются). Без них молча
@@ -19,16 +24,8 @@ const ROOT = join(DIR, "..");
 const PRIV = join(DIR, "private");
 const require = createRequire(import.meta.url);
 
-// ---------------- ядро из index.html ----------------
-function loadCore(){
-  const src = readFileSync(join(ROOT, "index.html"), "utf8");
-  const m = src.match(/\/\/ ====== K20CORE-BEGIN ======([\s\S]*?)\/\/ ====== K20CORE-END ======/);
-  if (!m) throw new Error("маркеры K20CORE не найдены в index.html");
-  return new Function(m[1] + `
-    return {parseK20, chainRound, halfUpScaled, rep, decFor, isT, isV, isFlagCol,
-            isDateCol, decodeEr0, readShortStrings, total, fmtD, fmtN, buildAoa, K20Error};`)();
-}
-const C = loadCore();
+// ---------------- ядро ----------------
+const C = require(join(ROOT, "k20.core.js"));
 
 // ---------------- мини-каркас ----------------
 let passed = 0, failed = 0, suite = "";
@@ -36,8 +33,24 @@ function head(s){ suite = s; console.log("\n== " + s + " =="); }
 function ok(cond, label){
   if (cond){ passed++; return true; }
   failed++;
-  console.error("  ✗ " + label);
+  console.error("  ✗ [" + suite + "] " + label);
   return false;
+}
+// python-сьюты: отсутствие интерпретатора — законный пропуск, любой другой сбой
+// (скрипт упал, мусор на stdout) обязан валить прогон. Иначе сверка молча
+// исчезает, а CI остаётся зелёным.
+const PY = process.env.PYTHON || "python3";
+function runPython(args, opts, label){
+  try {
+    return JSON.parse(execFileSync(PY, args, opts).toString());
+  } catch (e){
+    if (e.code === "ENOENT"){
+      console.log("  " + PY + " недоступен — " + label + " пропущен");
+      return null;
+    }
+    ok(false, label + " не отработал: " + String(e.message).split("\n")[0]);
+    return null;
+  }
 }
 function eq(a, b, label){
   return ok(Object.is(a, b) || JSON.stringify(a) === JSON.stringify(b),
@@ -143,6 +156,83 @@ head("синтетика: двухканальный прибор, переме�
   eq(tableCols.length, 20, "остальные 20 колонок в таблице");
 }
 
+// ---------------- 2a. граничные случаи ядра ----------------
+head("границы: имена колонок, метаданные, пустой период, арифметика дат");
+{
+  const base = ["Дата", "Er0", "V1ѕ", "T1ѕ"];
+  const mkFile = (names, extra = {}) => buildK20(Object.assign({
+    names, count: 2,
+    rows: [[tdt(2026, 6, 24), ...Array(names.length - 1).fill(1.5)],
+           [tdt(2026, 6, 25), ...Array(names.length - 1).fill(2.5)]],
+    meta: ["ТЕСТ", "Посуточный архив. ТЕСТ, № 1234567", "1234567"]
+  }, extra));
+
+  // имя «__proto__» в обычном литерале молча теряется — vals обязан быть без прототипа
+  {
+    const arc = C.parseK20(toAB(mkFile(["Дата", "__proto__", "T1ѕ"])));
+    eq(arc.rows[0].vals["__proto__"], 1.5, "колонка «__proto__» сохраняет значение");
+    eq(C.fmtN(C.rep("__proto__", arc.rows[0].vals["__proto__"]), "__proto__"), "1,5",
+       "«__proto__» доходит до таблицы числом, а не [object Object]");
+  }
+  // повтор имени затирал бы соседнюю колонку — нужен явный отказ
+  {
+    let err = null;
+    try { C.parseK20(toAB(mkFile(["Дата", "T1ѕ", "T1ѕ"]))); } catch (e){ err = e; }
+    ok(err instanceof C.K20Error && /повторяется имя колонки/.test(err.message),
+       "дубликат имени колонки → K20Error: " + (err && err.message));
+  }
+  // хвост метаданных бывает нестандартным — разбор обязан продолжаться без них
+  for (const gapBytes of [0, 40]){
+    const arc = C.parseK20(toAB(mkFile(base, {gapBytes})));
+    eq(arc.rows.length, 2, "хвост " + gapBytes + " байт: записи разобраны");
+    ok(!arc.meta.serial || arc.meta.serial !== "1234567" || gapBytes === 128,
+       "хвост " + gapBytes + " байт: метаданные не выдумываются");
+  }
+
+  eq(C.decodeEr0(0), "", "Er0 без битов");
+  eq(C.decodeEr0(NaN), "", "Er0 из NaN — не флаг, а пусто");
+  eq(C.decodeEr0(erBits(1 | 2 | 8)), "Bat;Er1;Er3;", "Er0: несколько битов подряд");
+  eq(C.decodeEr0(erBits(1 << 31)), "Er31;", "Er0: старший бит не теряется");
+  ok(C.isDateCol("Время") && C.isDateCol("Date") && C.isDateCol("Time"),
+     "первой колонкой признаётся не только «Дата»");
+  ok(!C.isFlagCol("Erx") && C.isFlagCol("Er") && C.isFlagCol("Er12"),
+     "флаговые колонки — Er и Er<цифры>");
+  eq(C.archiveTitle({archive: "Посуточный архив. ЭЛЬФ, № 1"}), "Посуточный архив",
+     "тип архива из метаданных");
+  eq(C.archiveTitle({archive: "   "}), "Посуточный архив", "пустые метаданные → подпись по умолчанию");
+
+  // «За последний месяц»: у коротких месяцев Date.UTC переполняется и период
+  // молча терял первые сутки (31 марта → 3 марта вместо 1-го)
+  const md = s => C.iso(C.shiftDays(C.monthEarlier(new Date(Date.parse(s + "T00:00:00Z"))), 1));
+  eq(md("2025-03-31"), "2025-03-01", "месяц назад от 31 марта");
+  eq(md("2026-05-31"), "2026-05-01", "месяц назад от 31 мая");
+  eq(md("2026-07-31"), "2026-07-01", "месяц назад от 31 июля");
+  eq(md("2026-01-15"), "2025-12-16", "месяц назад через границу года");
+  eq(C.isoToDate(""), null, "пустая дата — null, а не Invalid Date");
+  eq(C.isoToDate("не дата"), null, "мусор вместо даты — null");
+
+  // отчёт: пустые поля дат, пустой период, прибор без номера, узкий набор колонок
+  {
+    const arc = C.parseK20(toAB(mkFile(base)));
+    const names = arc.names.slice(1);
+    const full = C.buildAoa(arc.rows, names, arc.meta, "", "");
+    eq(full.fname, "отчет_данных_июнь_июнь_2026.xlsx",
+       "пустые поля дат: период берётся по строкам, а не «undefined»");
+    eq(full.widths.length, names.length + 1, "ширин ровно по числу колонок");
+
+    const empty = C.buildAoa([], names, arc.meta, "2026-06-30", "2026-06-24");
+    eq(empty.aoa.length, 3, "пустой период: только шапка, без строки «Итого»");
+    ok(/^отчет_данных_[а-я]+_[а-я]+_\d{4}\.xlsx$/.test(empty.fname),
+       "пустой период: имя файла всё равно осмысленное — " + empty.fname);
+
+    const noSerial = C.buildAoa(arc.rows, names, {device: "", archive: "", serial: ""}, "", "");
+    eq(noSerial.aoa[1], [], "прибор без номера: строка с номером пустая");
+
+    const narrow = C.buildAoa(arc.rows, ["dV1"], arc.meta, "", "");
+    eq(narrow.widths.length, 2, "узкий отчёт не тащит ширины несуществующих колонок");
+  }
+}
+
 // ---------------- 3. фазз: обрезки, бит-флипы, мусор ----------------
 head("фазз: повреждённые и мусорные файлы");
 {
@@ -238,13 +328,8 @@ head("округление: JS chainRound == python decimal ROUND_HALF_UP");
             cases.push([v, ...(C.isT(n) ? [3, 2] : C.isV(n) ? [5, 1] : [5, 2])]);
         }
     }
-  let py = null;
-  try {
-    py = JSON.parse(execFileSync("python3", [join(DIR, "round_ref.py")],
-      {input: JSON.stringify(cases), maxBuffer: 1 << 26}).toString());
-  } catch (e) {
-    console.log("  python3 недоступен — сьют пропущен (" + e.message.split("\n")[0] + ")");
-  }
+  const py = runPython([join(DIR, "round_ref.py")],
+    {input: JSON.stringify(cases), maxBuffer: 1 << 26}, "round_ref.py");
   if (py){
     let diff = 0;
     for (let i = 0; i < cases.length; i++){
@@ -284,8 +369,14 @@ if (!existsSync(PRIV)) {
       C.isFlagCol(n) ? "" : C.total(arc.rows, n))]);
     const gf = join(goldDir, basename(f) + ".json");
     if (!existsSync(gf)){
-      writeFileSync(gf, JSON.stringify({names: arc.names, meta: arc.meta, snap}, null, 1));
-      console.log("  " + f + ": эталонный снапшот записан (" + arc.rows.length + " строк)");
+      // Молчаливая самозапись эталона означала бы, что уже проникшая регрессия
+      // становится нормой, — поэтому только по явному разрешению.
+      if (process.env.UPDATE_GOLDEN){
+        writeFileSync(gf, JSON.stringify({names: arc.names, meta: arc.meta, snap}, null, 1));
+        console.log("  " + f + ": эталонный снапшот записан (" + arc.rows.length + " строк)");
+      } else {
+        ok(false, f + ": эталона нет — проверьте вывод и перезапустите с UPDATE_GOLDEN=1");
+      }
     } else {
       const g = JSON.parse(readFileSync(gf, "utf8"));
       eq(JSON.stringify({names: arc.names, meta: arc.meta, snap}),
@@ -306,7 +397,9 @@ if (!existsSync(PRIV)) {
   //  .xlsx — ведомость, собранная вручную из той же программы (есть «Итого»).
   const xlss = readdirSync(PRIV).filter(f => /^etalon_\d{4}\.(xls|xlsx)$/.test(f)).sort();
   if (!xlss.length) console.log("  файлов etalon_*.xls(x) нет — пропущено");
-  const revMap = {"Причина ненаработки": "Er0", "Наработка": "Наработка H0", "Vo": "dV1"};
+  // обратная карта строится из той же HEADER_MAP ядра — расходиться нечему
+  const revMap = Object.fromEntries(
+    Object.entries(C.HEADER_MAP).map(([ours, theirs]) => [theirs, ours]));
   // канонический порядок колонок посуточной выгрузки ЭЛЬФ (наши имена)
   const CANON = ["Дата", "Er0", "Наработка H0", "V1под", "V1обр", "dV1",
                  "T1под", "T1обр", "dT1", "Q1под"];
@@ -332,6 +425,7 @@ if (!existsSync(PRIV)) {
       .filter(r2 => r2 && /^\d\d\.\d\d\.\d{4}/.test(String(r2[0])));
     const matched = dateRows.map(r2 => byDate.get(String(r2[0]).slice(0, 10))).filter(Boolean);
     let cells = 0, diffs = 0, rowsMatched = 0, totalDiffs = 0, sawTotal = false;
+    const unmapped = new Set();
     for (const row of sheet.slice(hi + 1)){
       if (!row || row[0] == null) continue;
       const c0 = String(row[0]);
@@ -358,7 +452,11 @@ if (!existsSync(PRIV)) {
       rowsMatched++;
       for (let c = 1; c < hdr.length; c++){
         const n = hdr[c];
-        if (!n || !(n in kr.vals)) continue;
+        if (!n) continue;
+        // Колонка эталона, которой не нашлось пары, — это не «нечего сверять»,
+        // а тихая потеря покрытия: разъехалась HEADER_MAP, по которой строится
+        // revMap. Считаем такие и требуем ноль.
+        if (!(n in kr.vals)){ unmapped.add(n); continue; }
         const ours = kr.vals[n], theirs = row[c];
         cells++;
         if (typeof ours === "string"){
@@ -372,6 +470,9 @@ if (!existsSync(PRIV)) {
     }
     ok(rowsMatched > 0, xf + ": строки сопоставлены с архивом (" + rowsMatched + ")");
     eq(diffs, 0, xf + ": расхождения в ячейках (" + cells + " сверено)");
+    eq([...unmapped], [], xf + ": все колонки эталона сопоставлены с нашими");
+    eq(cells, rowsMatched * (hdr.filter(Boolean).length - 1),
+       xf + ": сверены все колонки во всех строках");
     if (sawTotal) eq(totalDiffs, 0, xf + ": расхождения в «Итого»");
     console.log("  ✓ " + xf + ": строк " + rowsMatched + ", ячеек " + cells +
       (sawTotal ? ", «Итого» сверено" : ", «Итого» в эталоне нет"));
@@ -388,6 +489,8 @@ head("xlsx: отчёт — валидный файл с теми же данны
   const pageSrc = readFileSync(join(ROOT, "index.html"), "utf8");
   const libRel = (pageSrc.match(/<script src="(xlsx[^"]+)"><\/script>/) || [])[1];
   ok(!!libRel, "страница подключает библиотеку xlsx (" + libRel + ")");
+  ok(pageSrc.includes('<script src="k20.core.js"></script>'),
+     "страница подключает ядро k20.core.js");
   const LIB = require(join(ROOT, libRel));
   const DEV = require(join(DIR, "xlsx.full.dev.js"));
 
@@ -518,19 +621,27 @@ head("xlsx: отчёт — валидный файл с теми же данны
       }
     eq(bad, 0, "все значения aoa дошли до файла (" + checked + " ячеек)");
     ok(checked > arc.rows.length * names.length, "ячеек проверено не меньше, чем данных");
+    // и обратно: писатель не добавил ничего лишнего
+    const want = new Set();
+    for (let r = 0; r < aoa.length; r++)
+      for (let c = 0; c < (aoa[r] || []).length; c++)
+        if (aoa[r][c] != null) want.add(colName(c) + (r + 1));
+    const extra = [...cells.keys()].filter(k => !want.has(k));
+    eq(extra.length, 0, "лишних ячеек в листе нет" + (extra.length ? ": " + extra.slice(0, 5) : ""));
+    // ширины: README называет их сверенными с выгрузкой КАРАТ-Экспресс
+    const cols = [...zip.get(sheetPath).toString()
+      .matchAll(/<col min="(\d+)" max="\d+" width="([\d.]+)" customWidth="1"\/>/g)];
+    eq(cols.length, widths.length, "элементов <col> ровно по числу ширин");
+    const badW = cols.filter((m, i) =>
+      +m[1] !== i + 1 || Math.abs(+m[2] - (widths[i] + 0.83203125)) > 1 / 256);
+    eq(badW.length, 0, "ширины колонок соответствуют widths из buildAoa");
   }
 
   // ---- B: python-валидатор (zipfile + xml.etree; openpyxl — если установлен)
   {
     const tmp = join(tmpdir(), "k20_report_test.xlsx");
     writeFileSync(tmp, buf);
-    let res = null;
-    try {
-      res = JSON.parse(execFileSync("python3", [join(DIR, "xlsx_check.py"), tmp],
-        {maxBuffer: 1 << 24}).toString());
-    } catch (e) {
-      console.log("  python3 недоступен — валидатор B пропущен");
-    }
+    const res = runPython([join(DIR, "xlsx_check.py"), tmp], {maxBuffer: 1 << 24}, "xlsx_check.py");
     if (res){
       ok(res.ok, "python: zip цел, весь XML корректен (" + res.members + " членов)" +
         (res.error ? " — " + res.error : ""));
@@ -566,6 +677,68 @@ head("xlsx: отчёт — валидный файл с теми же данны
     let z2 = null;
     try { z2 = unzip(Buffer.from(b64, "base64")); } catch (e) { ok(false, "base64-распаковка: " + e.message); }
     if (z2) ok(z2.has("xl/workbook.xml"), "base64-ветка — тот же валидный xlsx");
+  }
+
+  // ---- D: writeFile — путь, которым сохраняет кнопка «Сохранить в Excel»
+  {
+    const out = join(tmpdir(), "k20_writefile_test.xlsx");
+    const ret = LIB.writeFile(wb, out, {compression: true});
+    eq(ret, out, "writeFile возвращает имя файла");
+    let z3 = null;
+    try { z3 = unzip(readFileSync(out)); } catch (e){ ok(false, "writeFile: " + e.message); }
+    if (z3) ok(z3.has("xl/worksheets/sheet1.xml"), "writeFile положил на диск валидный xlsx");
+  }
+
+  // ---- E: ветка без сжатия (в браузере — когда нет CompressionStream)
+  {
+    const stored = Buffer.from(LIB.write(wb, {bookType: "xlsx", type: "array", compression: false}));
+    // методы членов берём из центральной директории: 0 — STORED, 8 — DEFLATE
+    let e = stored.length - 22;
+    while (e >= 0 && stored.readUInt32LE(e) !== 0x06054b50) e--;
+    let off = stored.readUInt32LE(e + 16);
+    const methods = [];
+    for (let i = 0, n = stored.readUInt16LE(e + 10); i < n; i++){
+      methods.push(stored.readUInt16LE(off + 10));
+      off += 46 + stored.readUInt16LE(off + 28) + stored.readUInt16LE(off + 30) + stored.readUInt16LE(off + 32);
+    }
+    ok(methods.length && methods.every(m => m === 0), "compression:false — все члены STORED");
+    ok(stored.length > buf.length, "без сжатия файл ожидаемо крупнее");
+    let z4 = null;
+    try { z4 = unzip(stored); } catch (err){ ok(false, "STORED-распаковка: " + err.message); }
+    if (z4){
+      const back = DEV.read(stored, {type: "buffer"});
+      const rows = DEV.utils.sheet_to_json(back.Sheets[back.SheetNames[0]], {header: 1, raw: true});
+      eq(rows[2] && rows[2][0], "Дата", "несжатый файл читается полным SheetJS");
+    }
+  }
+
+  // ---- F: управляющие символы из архива не должны ломать XML отчёта
+  {
+    const meta = {device: "ПРИБОР", archive: "Посуточный архив.", serial: "1234"};
+    const rowsF = [{date: new Date(Date.UTC(2026, 5, 24)),
+                    vals: {"V1под": 1.5, "Er0": "Bat\r;"}}];
+    const {aoa: aoaF, widths: wF} = C.buildAoa(rowsF, ["V1под", "Er0"], meta, "", "");
+    const wsF = LIB.utils.aoa_to_sheet(aoaF);
+    wsF["!cols"] = wF.map(w => ({wch: w}));
+    const wbF = LIB.utils.book_new();
+    LIB.utils.book_append_sheet(wbF, wsF, "Sheet1");
+    const bufF = Buffer.from(LIB.write(wbF, {bookType: "xlsx", type: "array", compression: true}));
+    const tmpF = join(tmpdir(), "k20_ctrl_test.xlsx");
+    writeFileSync(tmpF, bufF);
+    const resF = runPython([join(DIR, "xlsx_check.py"), tmpF], {maxBuffer: 1 << 24},
+      "xlsx_check.py (управляющие символы)");
+    if (resF) ok(resF.ok, "xlsx с управляющими символами — корректный XML" +
+      (resF.error ? " — " + resF.error : ""));
+    let zF = null;
+    try { zF = unzip(bufF); } catch (e){ ok(false, "распаковка отчёта с упр. символами: " + e.message); }
+    if (zF){
+      const xml = zF.get("xl/worksheets/sheet1.xml").toString();
+      ok(xml.includes("_x0001_") && xml.includes("_x000D_"),
+         "управляющие символы записаны как _xHHHH_, а не сырыми байтами");
+      ok(!/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(xml), "в sheet1.xml не осталось сырых упр. символов");
+      DEV.read(bufF, {type: "buffer"}); // полный SheetJS не должен споткнуться
+      ok(true, "полный SheetJS открывает такой отчёт");
+    }
   }
 }
 
