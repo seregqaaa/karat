@@ -184,7 +184,11 @@
 
   /* Диалог адреса объекта перед сохранением — только на сайте: в сборке APK
      адрес приходит из config.js, и эти стили уезжают вместе со стилями подвала. */
-  #addrDlg{width:100%; max-width:min(420px,calc(100vw - 32px)); padding:0;
+  /* по центру экрана явно: fixed + inset:0 + margin:auto центрируют по обеим
+     осям и не зависят от того, каким браузер видит стиль <dialog> по умолчанию */
+  #addrDlg{position:fixed; inset:0; margin:auto; padding:0;
+        width:100%; max-width:min(420px,calc(100vw - 32px));
+        height:fit-content; max-height:calc(100% - 32px); overflow:auto;
         background:var(--bg); color:var(--text);
         border:1px solid var(--border2); border-radius:var(--radius)}
   #addrDlg::backdrop{background:rgba(10,11,20,.62)}
@@ -327,7 +331,7 @@
       <p>Попадёт в заголовок отчёта и в имя файла — удобно, когда объектов несколько. Можно сохранить и как есть.</p>
       <label for="addrInput">Адрес</label>
       <input type="text" id="addrInput" maxlength="60" autocomplete="off"
-             enterkeyhint="done" placeholder="Например: Ясная 6">
+             enterkeyhint="done" placeholder="Например: Ленина 12">
       <div class="addr-btns">
         <button type="button" class="btn ghost" id="addrSkip">Сохранить как есть</button>
         <button type="submit" class="btn" id="addrOk" value="ok">Сохранить с адресом</button>

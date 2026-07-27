@@ -2,7 +2,7 @@
 // При изменении любого файла из ASSETS поднять версию CACHE — иначе
 // установленные PWA продолжат работать со старой копией. Тем же коммитом
 // поднимается K20_VER в k20.core.js: по нему опознаётся сборка в диагностике.
-const CACHE = "k20-viewer-v22";
+const CACHE = "k20-viewer-v23";
 const ASSETS = ["./", "index.html", "k20.core.js", "xlsx.write.js", "manifest.json",
                 "favicon.svg", "favicon.ico",
                 "icon-180.png", "icon-192.png", "icon-512.png", "icon-512-maskable.png"];
