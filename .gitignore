@@ -3,6 +3,7 @@ node_modules/
 
 # серверная часть — пока не публикуется
 config.js
+android/src/app/Config.kt
 mail-core.js
 mail-server.mjs
 yc-function.*
@@ -16,3 +17,10 @@ keys/
 
 # реальные архивы и эталоны для тестов — данные объекта не публикуются
 tests/private/
+
+# сборка Kotlin-версии
+android/.tools/
+android/build/
+android/out/
+android/tests/out/
+android/tests/fuzz/
