@@ -76,10 +76,10 @@
     '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/>' +
     '</Relationships>';
   // Стандартная тема Office — та же, что кладут Excel, SheetJS и openpyxl. Сам
-  // формат её не требует, но мобильные просмотрщики (Gmail/Google Таблицы на
-  // телефоне) на пакете без темы отказываются открывать файл, тогда как Excel на
-  // компьютере молча подставляет свою. Из-за этого отчёты и перестали
-  // открываться с телефона после перехода с SheetJS.
+  // формат её не требует; появилась здесь, когда искали причину отказа
+  // открывать отчёты на телефоне. Причина была не в ней (см. CORE ниже), но
+  // тема осталась: с ней пакет ближе к тому, что пишет Excel, а стили ссылаются
+  // на цвет темы (<color theme="1"/>).
   var THEME = XMLH +
     '<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Office Theme">' +
     '<a:themeElements><a:clrScheme name="Office"><a:dk1><a:sysClr val="windowText" lastClr="000000"/>' +
@@ -191,15 +191,17 @@
       '<TitlesOfParts><vt:vector size="1" baseType="lpstr"><vt:lpstr>' + esc(name) + '</vt:lpstr>' +
       '</vt:vector></TitlesOfParts></Properties>';
   }
-  function coreXml(){
-    var d = new Date().toISOString().replace(/\.\d+Z$/, "Z");
-    return XMLH +
-      '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties"' +
-      ' xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">' +
-      '<dcterms:created xsi:type="dcterms:W3CDTF">' + d + '</dcterms:created>' +
-      '<dcterms:modified xsi:type="dcterms:W3CDTF">' + d + '</dcterms:modified>' +
-      '</cp:coreProperties>';
-  }
+  // Пустой — ровно как у SheetJS в отчётах, которые открывались. Стоит положить
+  // сюда dcterms:created/modified, и импортёр Apple (предпросмотр вложения в
+  // Gmail на iPhone) перестаёт открывать файл: «OfficeImportErrorDomain error
+  // 912», хотя Excel, openpyxl и OPC-читатель Windows такой пакет разбирают без
+  // замечаний. Найдено перебором: подмена одного этого файла на пустой чинит
+  // открытие на телефоне, подмена любой другой части — нет. Дат в отчёте нет и
+  // не было, терять нечего.
+  var CORE = XMLH +
+    '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties"' +
+    ' xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/"' +
+    ' xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"/>';
   function workbookXml(name){
     return XMLH +
       '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"' +
@@ -338,7 +340,7 @@
       {name: "xl/worksheets/sheet1.xml", data: utf8(sheetXml(wb.Sheets[name]))},
       {name: "xl/theme/theme1.xml", data: utf8(THEME)},
       {name: "xl/styles.xml", data: utf8(STYLES)},
-      {name: "docProps/core.xml", data: utf8(coreXml())},
+      {name: "docProps/core.xml", data: utf8(CORE)},
       {name: "docProps/app.xml", data: utf8(appXml(name))}
     ];
   }
